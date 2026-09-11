@@ -9,7 +9,6 @@ import UltralyticsYOLO
 
 struct PoseOverlayView: View {
   let result: YOLOResult?
-  let videoSize: CGSize
 
   private static let bones: [(CocoKeypoint, CocoKeypoint)] = [
     (.leftAnkle, .leftKnee), (.leftKnee, .leftHip), (.rightAnkle, .rightKnee),
@@ -22,9 +21,10 @@ struct PoseOverlayView: View {
 
   var body: some View {
     Canvas { context, size in
-      guard let result, videoSize.width > 0, result.orig_shape.width > 0 else { return }
+      // Both sources display the inference buffer aspect-fit, so its size places the overlay.
+      guard let result, result.orig_shape.width > 0 else { return }
       let videoRect = AVMakeRect(
-        aspectRatio: videoSize, insideRect: CGRect(origin: .zero, size: size))
+        aspectRatio: result.orig_shape, insideRect: CGRect(origin: .zero, size: size))
       let scale = videoRect.width / result.orig_shape.width
 
       for keypoints in result.keypointsList {

@@ -20,8 +20,12 @@ struct ContentView: View {
       hud
       ZStack {
         Color.black
-        PlayerView(player: session.player)
-        PoseOverlayView(result: session.latestResult, videoSize: session.videoSize)
+        if session.source == .camera {
+          CameraPreviewView(previewLayer: session.cameraPreviewLayer)
+        } else {
+          PlayerView(player: session.player)
+        }
+        PoseOverlayView(result: session.latestResult)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       controls
@@ -109,24 +113,45 @@ struct ContentView: View {
 
   private var controls: some View {
     VStack(spacing: 10) {
-      HStack {
-        Button(action: session.togglePlayback) {
-          Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
-            .font(.title2).frame(width: 36)
-        }
-        .disabled(session.duration == 0)
-
-        Slider(
-          value: $scrubTime, in: 0...max(session.duration, 0.001),
-          onEditingChanged: { editing in
-            isScrubbing = editing
-            if !editing { session.seek(to: scrubTime) }
+      if session.source == .camera {
+        HStack {
+          Button {
+            session.flipCamera()
+          } label: {
+            Label("Flip camera", systemImage: "arrow.triangle.2.circlepath.camera")
           }
-        )
-        .disabled(session.duration == 0)
+          Spacer()
+          Text(session.cameraPosition == .front ? "Front camera" : "Back camera")
+            .font(.caption).foregroundStyle(.secondary)
+          Spacer()
+          Button {
+            session.stopCamera()
+          } label: {
+            Label("Stop camera", systemImage: "stop.circle")
+          }
+        }
+        .labelStyle(.iconOnly)
+        .font(.title3)
+      } else {
+        HStack {
+          Button(action: session.togglePlayback) {
+            Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
+              .font(.title2).frame(width: 36)
+          }
+          .disabled(session.duration == 0)
 
-        Text(timeString(scrubTime) + " / " + timeString(session.duration))
-          .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+          Slider(
+            value: $scrubTime, in: 0...max(session.duration, 0.001),
+            onEditingChanged: { editing in
+              isScrubbing = editing
+              if !editing { session.seek(to: scrubTime) }
+            }
+          )
+          .disabled(session.duration == 0)
+
+          Text(timeString(scrubTime) + " / " + timeString(session.duration))
+            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        }
       }
 
       HStack {
@@ -137,10 +162,18 @@ struct ContentView: View {
         }
         .pickerStyle(.segmented)
         .frame(width: 150)
+        .disabled(session.source == .camera)
 
         Spacer()
 
         Button("Reset", action: session.resetAnalysis)
+
+        Button {
+          session.startCamera()
+        } label: {
+          Label("Camera", systemImage: "camera")
+        }
+        .disabled(session.source == .camera)
 
         PhotosPicker(selection: $pickerItem, matching: .videos) {
           Label("Photos", systemImage: "photo.on.rectangle")
@@ -189,6 +222,39 @@ struct PlayerView: UIViewRepresentable {
   }
 
   func updateUIView(_ uiView: LayerView, context: Context) {}
+}
+
+/// Hosts the SDK's camera preview layer, resized with the view.
+struct CameraPreviewView: UIViewRepresentable {
+  let previewLayer: AVCaptureVideoPreviewLayer?
+
+  final class HostView: UIView {
+    var previewLayer: AVCaptureVideoPreviewLayer? {
+      didSet {
+        guard previewLayer !== oldValue else { return }
+        oldValue?.removeFromSuperlayer()
+        if let previewLayer {
+          previewLayer.frame = bounds
+          layer.addSublayer(previewLayer)
+        }
+      }
+    }
+
+    override func layoutSubviews() {
+      super.layoutSubviews()
+      previewLayer?.frame = bounds
+    }
+  }
+
+  func makeUIView(context: Context) -> HostView {
+    let view = HostView()
+    view.previewLayer = previewLayer
+    return view
+  }
+
+  func updateUIView(_ uiView: HostView, context: Context) {
+    uiView.previewLayer = previewLayer
+  }
 }
 
 /// Copies a picked movie out of the Photos sandbox into a temp file the player can open.

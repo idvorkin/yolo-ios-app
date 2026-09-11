@@ -3,7 +3,8 @@
 Kettlebell swing form analysis on top of the `UltralyticsYOLO` pose model. A native port of the
 analysis core from [idvorkin/swing-analyzer](https://github.com/idvorkin/swing-analyzer).
 
-- Plays a video from Photos, Files, or a path given via `SWING_VIDEO` (simulator testing).
+- Plays a video from Photos, Files, or a path given via `SWING_VIDEO` (simulator testing), or runs live from the
+  camera (back or front) through the SDK's `VideoCapture`.
 - Runs `yolo26n-pose` on each displayed frame via `AVPlayerItemVideoOutput`, dropping frames while inference is busy.
 - Feeds the most confident person into `KettlebellSwingAnalyzer` (top → connect → bottom → release state machine, rep count, rep quality).
 - Overlays the skeleton, spine (yellow), and the right arm (orange) that drive the analysis.
