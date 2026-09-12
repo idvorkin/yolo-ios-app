@@ -24,12 +24,13 @@ struct ContentView: View {
   @State private var isScrubbing = false
   @AppStorage("showSkeleton") private var showSkeleton = true
   @AppStorage("meView") private var meView = true
+  @AppStorage("galleryHeight") private var galleryHeight = 170.0
+  @State private var galleryDragStart: Double?
 
   private var busy: Bool { session.activity != .idle && session.source != .camera }
 
   var body: some View {
     VStack(spacing: 0) {
-      hud
       ZStack {
         Color.black
         MeViewZoom(
@@ -53,18 +54,22 @@ struct ContentView: View {
           .padding(16)
           .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
         }
+        hud
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .clipped()
       if !session.reps.isEmpty && session.source != .camera {
-        RepGalleryWidget(
-          reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase,
-          focusedRep: $focusedRep,
-          onSeek: { session.seek(to: $0.time) },
-          onOpen: { _ in showKeyframeViewer = true }
-        )
-        .frame(height: focusedRep == nil ? 170 : 240)
-        .padding(.horizontal, 8)
+        galleryHandle
+        if galleryHeight >= 40 {
+          RepGalleryWidget(
+            reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase,
+            focusedRep: $focusedRep,
+            onSeek: { session.seek(to: $0.time) },
+            onOpen: { _ in showKeyframeViewer = true }
+          )
+          .frame(height: galleryHeight)
+          .padding(.horizontal, 8)
+        }
       }
       controls
     }
@@ -111,96 +116,121 @@ struct ContentView: View {
     }
   }
 
+  /// Drag to give the gallery more or less of the screen; double-tap to collapse or restore it.
+  private var galleryHandle: some View {
+    Capsule()
+      .fill(Color(.tertiaryLabel))
+      .frame(width: 44, height: 5)
+      .padding(.vertical, 6)
+      .frame(maxWidth: .infinity)
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture(minimumDistance: 2)
+          .onChanged { value in
+            if galleryDragStart == nil { galleryDragStart = galleryHeight }
+            galleryHeight = min(max((galleryDragStart ?? galleryHeight) - value.translation.height, 0), 420)
+          }
+          .onEnded { _ in galleryDragStart = nil }
+      )
+      .onTapGesture(count: 2) {
+        withAnimation(.easeInOut(duration: 0.2)) { galleryHeight = galleryHeight < 40 ? 170 : 0 }
+      }
+      .accessibilityLabel("Gallery size")
+  }
+
   // MARK: - HUD
 
   private var hud: some View {
-    VStack(spacing: 6) {
-      HStack(alignment: .firstTextBaseline) {
+    VStack {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text("\(session.latestFrame?.swing?.repCount ?? 0)")
-          .font(.system(size: 40, weight: .bold, design: .rounded))
+          .font(.system(size: 34, weight: .bold, design: .rounded))
           .monospacedDigit()
-        Text("reps").font(.headline).foregroundStyle(.secondary)
+        Text("reps").font(.subheadline)
         if session.source == .camera {
-          Text("● REC").font(.caption.bold()).foregroundStyle(.red).padding(.leading, 8)
+          Text("● REC").font(.caption.bold()).foregroundStyle(.red)
         }
         Spacer()
-        VStack(alignment: .trailing, spacing: 2) {
-          Text(session.modelStatus).font(.caption).foregroundStyle(.secondary)
-          Text(String(format: "%.0f fps", session.fps)).font(.caption).monospacedDigit()
-            .foregroundStyle(.secondary)
+        Text(String(format: "%.0f fps", session.fps)).font(.caption2).monospacedDigit().opacity(0.7)
+        Button {
+          meView.toggle()
+        } label: {
+          Image(systemName: meView ? "person.crop.square.fill" : "person.crop.square").font(.title3)
         }
+        .accessibilityLabel(meView ? "Show whole frame" : "Zoom to me")
+        Button {
+          showSkeleton.toggle()
+        } label: {
+          Image(systemName: showSkeleton ? "eye" : "eye.slash").font(.title3)
+        }
+        .accessibilityLabel(showSkeleton ? "Hide skeleton" : "Show skeleton")
       }
-
       HStack(spacing: 5) {
         ForEach(SwingPhase.allCases, id: \.self) { phase in
           let active = session.latestFrame?.swing?.phase == phase
           Text(phase.rawValue.uppercased())
             .font(.caption2.weight(.semibold))
             .fixedSize()
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(active ? Color.accentColor : Color(.secondarySystemFill))
-            .foregroundStyle(active ? .white : .secondary)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(active ? Color.accentColor : Color.white.opacity(0.18))
+            .foregroundStyle(active ? .white : Color.white.opacity(0.85))
             .clipShape(Capsule())
         }
         Spacer()
-        Button {
-          meView.toggle()
-        } label: {
-          Image(systemName: meView ? "person.crop.square.fill" : "person.crop.square")
-            .font(.title3)
-            .foregroundStyle(meView ? Color.accentColor : .secondary)
-        }
-        .accessibilityLabel(meView ? "Show whole frame" : "Zoom to me")
-        .padding(.trailing, 6)
-        Button {
-          showSkeleton.toggle()
-        } label: {
-          Image(systemName: showSkeleton ? "eye" : "eye.slash")
-            .font(.title3)
-            .foregroundStyle(showSkeleton ? Color.accentColor : .secondary)
-        }
-        .accessibilityLabel(showSkeleton ? "Hide skeleton" : "Show skeleton")
       }
 
-      HStack(spacing: 16) {
+      Spacer()
+
+      HStack(spacing: 14) {
         metric("SPINE", session.latestFrame?.swing?.angles.spine)
         metric("ARM", session.latestFrame?.swing?.angles.arm)
         metric("HIP", session.latestFrame?.swing?.angles.hip)
         metric("KNEE", session.latestFrame?.swing?.angles.knee)
         Spacer()
       }
-
       if let message = session.statusMessage {
-        Text(message).font(.footnote).foregroundStyle(.secondary)
+        Text(message).font(.caption).lineLimit(1).opacity(0.85)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else if let quality = session.lastQuality {
         Text("Last rep \(quality.score)/100 · \(quality.feedback.joined(separator: " · "))")
-          .font(.footnote).foregroundStyle(.secondary)
+          .font(.caption).lineLimit(1).opacity(0.85)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .padding(.horizontal).padding(.vertical, 8)
+    .foregroundStyle(.white)
+    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+    .padding(.horizontal, 12).padding(.vertical, 8)
+    .background(
+      VStack(spacing: 0) {
+        LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+          .frame(height: 90)
+        Spacer()
+        LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+          .frame(height: 80)
+      }
+      .allowsHitTesting(false)
+    )
   }
 
   private func metric(_ label: String, _ value: Double?) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Text(label).font(.caption2).foregroundStyle(.secondary)
+    HStack(alignment: .firstTextBaseline, spacing: 3) {
+      Text(label).font(.caption2).opacity(0.75)
       Text(value.map { String(format: "%.0f°", $0) } ?? "–")
-        .font(.title3.weight(.semibold)).monospacedDigit()
+        .font(.callout.weight(.semibold)).monospacedDigit()
     }
   }
 
   // MARK: - Controls
 
   private var controls: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: 6) {
       if session.source == .camera {
         cameraControls
       } else {
         playbackControls
       }
     }
-    .padding(.horizontal).padding(.vertical, 10)
+    .padding(.horizontal).padding(.vertical, 6)
     .disabled(busy)
   }
 
@@ -236,7 +266,7 @@ struct ContentView: View {
         navButton("chevron.left.2", "Previous checkpoint") { session.seekToCheckpoint(offset: -1) }
         navButton("chevron.left", "Previous frame") { session.stepFrame(-1) }
         Button(action: session.togglePlayback) {
-          Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.title)
+          Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.title2)
         }
         .disabled(session.duration == 0)
         navButton("chevron.right", "Next frame") { session.stepFrame(1) }
@@ -245,7 +275,7 @@ struct ContentView: View {
       }
       .frame(maxWidth: .infinity)
 
-      HStack {
+      HStack(spacing: 10) {
         Slider(
           value: $scrubTime, in: 0...max(session.duration, 0.001),
           onEditingChanged: { editing in
@@ -256,20 +286,21 @@ struct ContentView: View {
         .disabled(session.duration == 0)
         Text(timeString(scrubTime) + " / " + timeString(session.duration))
           .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        Menu {
+          Picker("Speed", selection: $session.rate) {
+            Text("¼×").tag(Float(0.25))
+            Text("½×").tag(Float(0.5))
+            Text("1×").tag(Float(1.0))
+          }
+        } label: {
+          Text(session.rate == 1 ? "1×" : session.rate == 0.5 ? "½×" : "¼×")
+            .font(.caption.weight(.semibold)).monospacedDigit()
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Color(.secondarySystemFill), in: Capsule())
+        }
       }
 
-      HStack(spacing: 12) {
-        Picker("Speed", selection: $session.rate) {
-          Text("¼×").tag(Float(0.25))
-          Text("½×").tag(Float(0.5))
-          Text("1×").tag(Float(1.0))
-        }
-        .pickerStyle(.segmented)
-        .controlSize(.small)
-        .frame(width: 110)
-
-        Spacer()
-
+      HStack(spacing: 22) {
         if session.duration > 0 {
           Button {
             session.pause()
@@ -297,6 +328,7 @@ struct ContentView: View {
             Label("Save to Photos", systemImage: "square.and.arrow.down")
           }
         }
+        Spacer()
         Button {
           session.startCamera()
         } label: {
