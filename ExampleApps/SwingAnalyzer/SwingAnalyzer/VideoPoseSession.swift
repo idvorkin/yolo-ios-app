@@ -75,6 +75,12 @@ final class VideoPoseSession: NSObject, ObservableObject {
     reps.first { currentTime >= $0.startTime - 0.05 && currentTime <= $0.endTime + 0.05 }
   }
 
+  /// The checkpoint the playhead is sitting on, if any (within ~3 frames).
+  var currentCheckpoint: RepPosition? {
+    reps.flatMap(\.checkpoints).min { abs($0.time - currentTime) < abs($1.time - currentTime) }
+      .flatMap { abs($0.time - currentTime) <= 0.1 ? $0 : nil }
+  }
+
   override init() {
     super.init()
     player.actionAtItemEnd = .pause

@@ -10,7 +10,9 @@ struct RepGalleryWidget: View {
   let reps: [RepRecord]
   let currentRep: Int?
   @Binding var focusedPhase: SwingPhase?
+  @Binding var focusedRep: Int?
   let onSeek: (RepPosition) -> Void
+  let onOpen: (RepPosition) -> Void
 
   var body: some View {
     GeometryReader { geo in
@@ -21,7 +23,20 @@ struct RepGalleryWidget: View {
               ForEach(reps) { rep in
                 RepRow(
                   rep: rep, isCurrent: rep.number == currentRep, focusedPhase: focusedPhase,
-                  width: geo.size.width, height: 72, onSeek: onSeek
+                  width: geo.size.width, height: rep.number == focusedRep ? 150 : 72,
+                  onSeek: onSeek,
+                  onFocus: { phase in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                      if focusedRep == rep.number && focusedPhase == phase {
+                        focusedRep = nil
+                        focusedPhase = nil
+                      } else {
+                        focusedRep = rep.number
+                        focusedPhase = phase
+                      }
+                    }
+                  },
+                  onOpen: onOpen
                 )
                 .id(rep.number)
               }
@@ -89,6 +104,8 @@ struct RepRow: View {
   let width: CGFloat
   let height: CGFloat
   let onSeek: (RepPosition) -> Void
+  var onFocus: ((SwingPhase) -> Void)? = nil
+  var onOpen: ((RepPosition) -> Void)? = nil
 
   var body: some View {
     HStack(spacing: GalleryLayout.spacing) {
@@ -103,8 +120,15 @@ struct RepRow: View {
             width: GalleryLayout.columnWidth(for: phase, focused: focusedPhase, totalWidth: width),
             height: height
           )
+          .onTapGesture(count: 2) { onFocus?(phase) }
           .onTapGesture {
             if let position = rep.positions[phase] { onSeek(position) }
+          }
+          .onLongPressGesture {
+            if let position = rep.positions[phase] {
+              onSeek(position)
+              onOpen?(position)
+            }
           }
       }
     }

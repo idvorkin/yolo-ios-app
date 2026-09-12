@@ -15,10 +15,6 @@ enum CocoKeypoint: Int, CaseIterable {
   case leftKnee, rightKnee, leftAnkle, rightAnkle
 }
 
-enum BodySide {
-  case left, right
-}
-
 struct SwingSkeleton {
   /// Confidence below which a keypoint is treated as absent (web: `isPointVisible`).
   static let visibleThreshold: Float = 0.2
@@ -39,10 +35,26 @@ struct SwingSkeleton {
     return points[i]
   }
 
-  /// Right-side keypoint when visible, otherwise the left one. The web app always has 33 BlazePose points and
-  /// reads the right side unconditionally; YOLO leaves occluded joints at low confidence, so fall back.
-  private func rightOrLeft(_ right: CocoKeypoint, _ left: CocoKeypoint) -> CGPoint? {
-    point(right) ?? point(left)
+  /// The keypoint set of the side whose joints are all visible and, on average, more confident. Picking a whole
+  /// side at once keeps hip/knee angles from mixing a near-side hip with a far-side knee when the pose model's
+  /// left/right labels are unreliable (side views, people facing left).
+  private func bestSide(_ right: [CocoKeypoint], _ left: [CocoKeypoint]) -> [CGPoint]? {
+    func resolve(_ joints: [CocoKeypoint]) -> (points: [CGPoint], confidence: Float)? {
+      var points: [CGPoint] = []
+      var total: Float = 0
+      for joint in joints {
+        guard let p = point(joint) else { return nil }
+        points.append(p)
+        total += conf[joint.rawValue]
+      }
+      return (points, total / Float(joints.count))
+    }
+    switch (resolve(right), resolve(left)) {
+    case (let r?, let l?): return r.confidence >= l.confidence ? r.points : l.points
+    case (let r?, nil): return r.points
+    case (nil, let l?): return l.points
+    default: return nil
+    }
   }
 
   // MARK: - Angles
@@ -59,8 +71,9 @@ struct SwingSkeleton {
   }
 
   /// Upper-arm angle from vertical: 0 = hanging straight down, 90 = horizontal, 180 = overhead.
-  /// Uses the preferred side when reliable, otherwise the more vertical reliable arm, otherwise any visible arm.
-  func armToVerticalAngle(preferred: BodySide) -> Double {
+  /// Uses the more raised of the reliable arms: in a two-hand swing both agree, and in a one-hand swing the
+  /// working arm is the raised one while the free arm hangs. Falls back to any visible arm, then 0.
+  var armToVerticalAngle: Double {
     func angle(_ shoulder: CGPoint, _ elbow: CGPoint) -> Double {
       let dx = elbow.x - shoulder.x
       let dy = elbow.y - shoulder.y
@@ -69,67 +82,41 @@ struct SwingSkeleton {
       let cosine = Double(min(max(dy / magnitude, -1), 1))
       return acos(cosine) * 180 / .pi
     }
-
     let reliable = Self.reliableThreshold
-    let rightPair = point(.rightShoulder, minConf: reliable).flatMap { s in
-      point(.rightElbow, minConf: reliable).map { (s, $0) }
+    let arms = [(CocoKeypoint.rightShoulder, CocoKeypoint.rightElbow), (.leftShoulder, .leftElbow)]
+    let reliableAngles = arms.compactMap { s, e -> Double? in
+      guard let sp = point(s, minConf: reliable), let ep = point(e, minConf: reliable) else { return nil }
+      return angle(sp, ep)
     }
-    let leftPair = point(.leftShoulder, minConf: reliable).flatMap { s in
-      point(.leftElbow, minConf: reliable).map { (s, $0) }
+    if let best = reliableAngles.max() { return best }
+    for (s, e) in arms {
+      if let sp = point(s), let ep = point(e) { return angle(sp, ep) }
     }
-
-    switch (preferred, rightPair, leftPair) {
-    case (.right, let pair?, _), (.left, _, let pair?):
-      return angle(pair.0, pair.1)
-    case (_, let r?, let l?):
-      let ra = angle(r.0, r.1)
-      let la = angle(l.0, l.1)
-      return min(ra, la)
-    default:
-      if let s = point(.rightShoulder), let e = point(.rightElbow) { return angle(s, e) }
-      if let s = point(.leftShoulder), let e = point(.leftElbow) { return angle(s, e) }
-      return 0  // web default when no arm is available
-
-    }
+    return 0  // web default when no arm is available
   }
 
-  /// Knee–hip–shoulder angle: ~180 standing, ~90 deep hinge. 0 when keypoints are missing.
+  /// Knee–hip–shoulder angle: ~180 standing, ~90 deep hinge. 0 when no side has all three joints.
   var hipAngle: Double {
-    guard let knee = rightOrLeft(.rightKnee, .leftKnee),
-      let hip = rightOrLeft(.rightHip, .leftHip),
-      let shoulder = rightOrLeft(.rightShoulder, .leftShoulder)
+    guard let p = bestSide([.rightKnee, .rightHip, .rightShoulder], [.leftKnee, .leftHip, .leftShoulder])
     else { return 0 }
-    return Self.angle(knee, vertex: hip, shoulder)
+    return Self.angle(p[0], vertex: p[1], p[2])
   }
 
-  /// Hip–knee–ankle angle: ~180 straight leg, ~90 deep squat. 0 when keypoints are missing.
+  /// Hip–knee–ankle angle: ~180 straight leg, ~90 deep squat. 0 when no side has all three joints.
   var kneeAngle: Double {
-    guard let hip = rightOrLeft(.rightHip, .leftHip),
-      let knee = rightOrLeft(.rightKnee, .leftKnee),
-      let ankle = rightOrLeft(.rightAnkle, .leftAnkle)
+    guard let p = bestSide([.rightHip, .rightKnee, .rightAnkle], [.leftHip, .leftKnee, .leftAnkle])
     else { return 0 }
-    return Self.angle(hip, vertex: knee, ankle)
+    return Self.angle(p[0], vertex: p[1], p[2])
   }
 
-  /// Wrist height above the shoulder midpoint in pixels (positive = wrist above shoulders).
-  /// Prefers the requested wrist; with both wrists reliable it averages them (two-handed swing).
-  func wristHeight(preferred: BodySide) -> Double {
+  /// Height of the higher reliable wrist above the shoulder midpoint, in pixels (positive = above shoulders).
+  var wristHeight: Double {
     guard let ls = point(.leftShoulder), let rs = point(.rightShoulder) else { return 0 }
     let shoulderMidY = (ls.y + rs.y) / 2
-    let reliable = Self.reliableThreshold
-    let left = point(.leftWrist, minConf: reliable)
-    let right = point(.rightWrist, minConf: reliable)
-
-    let wristY: CGFloat
-    switch (preferred, right, left) {
-    case (.right, let r?, _): wristY = r.y
-    case (.left, _, let l?): wristY = l.y
-    case (_, let r?, let l?): wristY = (r.y + l.y) / 2
-    case (_, let r?, nil): wristY = r.y
-    case (_, nil, let l?): wristY = l.y
-    default: return 0
-    }
-    return Double(shoulderMidY - wristY)
+    let wrists = [point(.leftWrist, minConf: Self.reliableThreshold), point(.rightWrist, minConf: Self.reliableThreshold)]
+      .compactMap { $0 }
+    guard let highest = wrists.map(\.y).min() else { return 0 }
+    return Double(shoulderMidY - highest)
   }
 
   // MARK: - Helpers

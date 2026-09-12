@@ -13,8 +13,11 @@ struct ContentView: View {
   @StateObject private var session = VideoPoseSession()
   @State private var pickerItem: PhotosPickerItem?
   @State private var showFileImporter = false
+  @State private var showPhotosPicker = false
   @State private var showGallery = false
+  @State private var showKeyframeViewer = false
   @State private var focusedPhase: SwingPhase?
+  @State private var focusedRep: Int?
   @State private var scrubTime = 0.0
   @State private var isScrubbing = false
 
@@ -44,11 +47,12 @@ struct ContentView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       if !session.reps.isEmpty && session.source != .camera {
         RepGalleryWidget(
-          reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase
-        ) { position in
-          session.seek(to: position.time)
-        }
-        .frame(height: 170)
+          reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase,
+          focusedRep: $focusedRep,
+          onSeek: { session.seek(to: $0.time) },
+          onOpen: { _ in showKeyframeViewer = true }
+        )
+        .frame(height: focusedRep == nil ? 170 : 240)
         .padding(.horizontal, 8)
       }
       controls
@@ -66,6 +70,7 @@ struct ContentView: View {
     .onChange(of: session.currentTime) { _, time in
       if !isScrubbing { scrubTime = time }
     }
+    .photosPicker(isPresented: $showPhotosPicker, selection: $pickerItem, matching: .videos)
     .fileImporter(
       isPresented: $showFileImporter, allowedContentTypes: [.movie, .video, .mpeg4Movie]
     ) { result in
@@ -78,6 +83,9 @@ struct ContentView: View {
       if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
         session.load(url: dest)
       }
+    }
+    .fullScreenCover(isPresented: $showKeyframeViewer) {
+      KeyframeViewer(session: session)
     }
     .sheet(isPresented: $showGallery) {
       RepGallerySheet(reps: session.reps, currentRep: session.currentRep?.number) { position in
@@ -215,17 +223,26 @@ struct ContentView: View {
           .font(.caption).monospacedDigit().foregroundStyle(.secondary)
       }
 
-      HStack(spacing: 14) {
+      HStack(spacing: 12) {
         Picker("Speed", selection: $session.rate) {
           Text("¼×").tag(Float(0.25))
           Text("½×").tag(Float(0.5))
           Text("1×").tag(Float(1.0))
         }
         .pickerStyle(.segmented)
-        .frame(width: 130)
+        .controlSize(.small)
+        .frame(width: 110)
 
         Spacer()
 
+        if session.duration > 0 {
+          Button {
+            session.pause()
+            showKeyframeViewer = true
+          } label: {
+            Label("Full screen", systemImage: "arrow.up.left.and.arrow.down.right")
+          }
+        }
         if !session.reps.isEmpty {
           Button {
             session.trimToReps()
@@ -250,13 +267,19 @@ struct ContentView: View {
         } label: {
           Label("Camera", systemImage: "camera")
         }
-        PhotosPicker(selection: $pickerItem, matching: .videos) {
-          Label("Photos", systemImage: "photo.on.rectangle")
-        }
-        Button {
-          showFileImporter = true
+        Menu {
+          Button {
+            showPhotosPicker = true
+          } label: {
+            Label("Photos", systemImage: "photo.on.rectangle")
+          }
+          Button {
+            showFileImporter = true
+          } label: {
+            Label("Files", systemImage: "folder")
+          }
         } label: {
-          Label("Files", systemImage: "folder")
+          Label("Import video", systemImage: "folder.badge.plus")
         }
       }
       .labelStyle(.iconOnly)

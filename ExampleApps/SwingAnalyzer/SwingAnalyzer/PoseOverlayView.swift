@@ -19,7 +19,7 @@ enum PoseDrawing {
 
   /// Draws `keypoints` (normalized coordinates) into `rect`, the on-screen rect of the source image.
   static func draw(
-    _ context: GraphicsContext, keypoints: Keypoints, in rect: CGRect, lineWidth: CGFloat = 3
+    _ context: GraphicsContext, keypoints: Keypoints, in rect: CGRect, lineWidth: CGFloat = 1.5
   ) {
     func mapped(_ k: CocoKeypoint) -> CGPoint? {
       let i = k.rawValue
@@ -48,10 +48,10 @@ enum PoseDrawing {
       var spine = Path()
       spine.move(to: CGPoint(x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2))
       spine.addLine(to: CGPoint(x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2))
-      context.stroke(spine, with: .color(.yellow), lineWidth: lineWidth + 1)
+      context.stroke(spine, with: .color(.yellow), lineWidth: lineWidth * 1.5)
     }
 
-    let r = lineWidth * 1.3
+    let r = lineWidth * 0.6  // small joint markers; the bones carry the shape
     for k in CocoKeypoint.allCases {
       guard let p = mapped(k) else { continue }
       context.fill(
@@ -89,7 +89,7 @@ struct PoseThumbnail: View {
           Canvas { context, size in
             let rect = AVMakeRect(
               aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: size))
-            PoseDrawing.draw(context, keypoints: position.keypoints, in: rect, lineWidth: 1.5)
+            PoseDrawing.draw(context, keypoints: position.keypoints, in: rect, lineWidth: 1)
           }
         } else {
           Image(systemName: "figure.strengthtraining.traditional")

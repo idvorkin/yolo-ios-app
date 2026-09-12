@@ -129,16 +129,16 @@ final class KettlebellSwingAnalyzer {
     metrics = RepMetrics()
   }
 
-  /// Advances the state machine by one frame. Always uses the right arm, matching the web analyzer;
-  /// mirror the skeleton for left-handed swings. `image` is called only when this frame becomes a phase peak.
+  /// Advances the state machine by one frame. Joints are chosen per frame by confidence (see SwingSkeleton), so
+  /// facing direction and handedness don't matter. `image` is called only when this frame becomes a phase peak.
   func process(keypoints: Keypoints, time: Double, image: () -> UIImage?) -> SwingFrameResult {
     let skeleton = SwingSkeleton(keypoints: keypoints)
     let angles = SwingAngles(
-      arm: skeleton.armToVerticalAngle(preferred: .right),
+      arm: skeleton.armToVerticalAngle,
       spine: skeleton.spineAngle,
       hip: skeleton.hipAngle,
       knee: skeleton.kneeAngle,
-      wristHeight: skeleton.wristHeight(preferred: .right))
+      wristHeight: skeleton.wristHeight)
 
     wristHeightHistory.append(angles.wristHeight)
     if wristHeightHistory.count > wristHeightWindowSize * 2 {
