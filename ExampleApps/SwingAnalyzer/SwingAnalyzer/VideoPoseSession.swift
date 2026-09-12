@@ -6,7 +6,7 @@
 //
 //  Live camera: every frame is recorded and analyzed live (frames drop if inference falls behind). Done trims the
 //  recording to the rep span and runs the offline pass on the clip. Imported files get the offline pass on load.
-//  Playback then replays the stored pose track; inference only runs for frames the track doesn't cover.
+//  Playback then replays the stored pose track from the player clock; no frames are pulled from the player.
 
 import AVFoundation
 import Combine
@@ -60,7 +60,6 @@ final class VideoPoseSession: NSObject, ObservableObject {
 
   private var predictor: BasePredictor?
   private var pipeline = SwingPipeline()
-  private var videoOutput: AVPlayerItemVideoOutput?
   private var displayLink: CADisplayLink?
   private let inferenceQueue = DispatchQueue(label: "swing.inference")
   private var inferenceBusy = false
@@ -284,12 +283,9 @@ final class VideoPoseSession: NSObject, ObservableObject {
   private func installPlayerItem(url: URL, pipeline: SwingPipeline) {
     pause()
     let asset = AVURLAsset(url: url)
+    // No AVPlayerItemVideoOutput here: attaching a BGRA output routes an HDR item through an SDR conversion and
+    // the player layer shows the washed-out result. Playback replays the stored track from the player clock.
     let item = AVPlayerItem(asset: asset)
-    let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-    ])
-    item.add(output)
-    videoOutput = output
     adopt(pipeline: pipeline)
     player.replaceCurrentItem(with: item)
     source = .file
@@ -400,30 +396,22 @@ final class VideoPoseSession: NSObject, ObservableObject {
   }
 
   @objc private func displayLinkFired(_ link: CADisplayLink) {
-    guard source == .file, let output = videoOutput else { return }
-    let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
-    guard output.hasNewPixelBuffer(forItemTime: itemTime),
-      let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil)
-    else { return }
+    guard source == .file, player.currentItem != nil else { return }
+    let time = player.currentTime().seconds
+    guard time.isFinite else { return }
     if debugFramesToLog > 0 {
       debugFramesToLog -= 1
-      log.event(
-        "display_frame",
-        [
-          "item_time": itemTime.seconds, "player_time": player.currentTime().seconds,
-          "rate": player.rate,
-        ])
+      log.event("display_frame", ["player_time": time, "rate": player.rate])
     }
-    ingest(pixelBuffer: pixelBuffer, time: itemTime.seconds, replay: true)
+    guard let frame = pipeline.track.nearest(to: time, tolerance: frameDuration * 0.6),
+      frame.time != latestFrame?.time
+    else { return }
+    show(frame)
   }
 
   // MARK: - Shared frame ingest
 
-  private func ingest(pixelBuffer: CVPixelBuffer, time: Double, replay: Bool) {
-    if replay, let frame = pipeline.track.nearest(to: time, tolerance: frameDuration * 0.6) {
-      show(frame)
-      return
-    }
+  private func ingest(pixelBuffer: CVPixelBuffer, time: Double) {
     guard liveInferenceEnabled, let predictor, !inferenceBusy,
       let sampleBuffer = Self.makeSampleBuffer(pixelBuffer, time: time)
     else { return }
@@ -507,7 +495,6 @@ final class VideoPoseSession: NSObject, ObservableObject {
   func startCamera(position: AVCaptureDevice.Position = .back) {
     pause()
     player.replaceCurrentItem(with: nil)
-    videoOutput = nil
     duration = 0
     stopCamera()
     pipeline = SwingPipeline()
@@ -560,7 +547,7 @@ final class VideoPoseSession: NSObject, ObservableObject {
     let time = pts - (cameraFirstTime ?? pts)
     duration = time
     currentTime = time
-    ingest(pixelBuffer: pixelBuffer, time: time, replay: false)
+    ingest(pixelBuffer: pixelBuffer, time: time)
   }
 
   func flipCamera() {

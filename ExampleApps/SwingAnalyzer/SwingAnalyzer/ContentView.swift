@@ -47,6 +47,7 @@ struct ContentView: View {
                 .scaleEffect(zoom.scale)
                 .offset(zoom.offset)
                 .animation(.easeOut(duration: 0.3), value: zoom)
+                .clipped()  // clip the vector overlay only; a clip on the video's ancestors can drop HDR
             }
           }
         }
@@ -62,7 +63,6 @@ struct ContentView: View {
         hud
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .clipped()
       if !session.reps.isEmpty && session.source != .camera {
         galleryHandle
         if galleryHeight >= 40 {
