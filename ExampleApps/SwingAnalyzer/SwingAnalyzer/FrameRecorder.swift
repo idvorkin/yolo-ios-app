@@ -88,7 +88,7 @@ enum VideoFile {
     let asset = AVURLAsset(url: url)
     guard
       let export = AVAssetExportSession(
-        asset: asset, presetName: AVAssetExportPresetHighestQuality)
+        asset: asset, presetName: AVAssetExportPresetHEVCHighestQuality)  // HEVC keeps HDR clips HDR
     else { throw VideoFileError.exportFailed("no export session") }
     // The quality presets still pass an H.264 track through untouched; a video composition forces every frame
     // through the compositor and therefore a clean re-encode.

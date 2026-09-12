@@ -13,10 +13,12 @@ struct KeyframeViewer: View {
   var body: some View {
     ZStack {
       Color.black.ignoresSafeArea()
-      ZoomableContainer {
+      ZoomableContainer { zoom in
         ZStack {
-          PlayerView(player: session.player)
-          if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
+          PlayerView(player: session.player, zoom: zoom)
+          if showSkeleton {
+            PoseOverlayView(frame: session.latestFrame).scaleEffect(zoom.scale).offset(zoom.offset)
+          }
         }
       }
       .ignoresSafeArea()
@@ -78,9 +80,10 @@ struct KeyframeViewer: View {
   }
 }
 
-/// Pinch to zoom (1×–6×), drag to pan, double-tap to toggle 2.5× / reset.
+/// Pinch to zoom (1×–6×), drag to pan, double-tap to toggle 2.5× / reset. Hands the zoom to the content rather
+/// than transforming it, so video layers can resize themselves (a view transform strips HDR from AVPlayerLayer).
 struct ZoomableContainer<Content: View>: View {
-  @ViewBuilder let content: () -> Content
+  @ViewBuilder let content: (ZoomTransform) -> Content
 
   @State private var scale: CGFloat = 1
   @State private var baseScale: CGFloat = 1
@@ -88,9 +91,7 @@ struct ZoomableContainer<Content: View>: View {
   @State private var baseOffset: CGSize = .zero
 
   var body: some View {
-    content()
-      .scaleEffect(scale)
-      .offset(offset)
+    content(ZoomTransform(scale: scale, offset: offset))
       .gesture(
         MagnifyGesture()
           .onChanged { value in

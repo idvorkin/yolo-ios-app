@@ -35,14 +35,19 @@ struct ContentView: View {
         Color.black
         MeViewZoom(
           crop: meView ? session.personCrop : nil, imageSize: session.latestFrame?.imageSize
-        ) {
+        ) { zoom in
           ZStack {
             if session.source == .camera {
-              CameraPreviewView(previewLayer: session.cameraPreviewLayer)
+              CameraPreviewView(previewLayer: session.cameraPreviewLayer, zoom: zoom)
             } else {
-              PlayerView(player: session.player)
+              PlayerView(player: session.player, zoom: zoom)
             }
-            if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
+            if showSkeleton {
+              PoseOverlayView(frame: session.latestFrame)
+                .scaleEffect(zoom.scale)
+                .offset(zoom.offset)
+                .animation(.easeOut(duration: 0.3), value: zoom)
+            }
           }
         }
         if case .working(let label, let progress) = session.activity, session.source != .camera {
@@ -388,34 +393,44 @@ struct ContentView: View {
   }
 }
 
-/// Scales and pans its content so `crop` (a normalized rect in image space) fills the container, keeping the video
-/// and overlay together. With no crop it shows the whole aspect-fit frame.
+/// How much to enlarge the preview and where to shift it so the person fills the container.
+struct ZoomTransform: Equatable {
+  var scale: CGFloat = 1
+  var offset: CGSize = .zero
+
+  /// The frame a full-container layer should take to show this zoom (aspect-fit content inside it).
+  func layerFrame(in container: CGSize) -> CGRect {
+    CGRect(
+      x: container.width / 2 - container.width * scale / 2 + offset.width,
+      y: container.height / 2 - container.height * scale / 2 + offset.height,
+      width: container.width * scale, height: container.height * scale)
+  }
+}
+
+/// Computes the zoom that makes `crop` (a normalized rect in image space) fill the container and hands it to the
+/// content. Video layers apply it by resizing their frame (a transform on the view tree would strip HDR from
+/// AVPlayerLayer and wash the picture out); the vector overlay applies it as a scale/offset.
 struct MeViewZoom<Content: View>: View {
   let crop: CGRect?
   let imageSize: CGSize?
-  @ViewBuilder let content: () -> Content
+  @ViewBuilder let content: (ZoomTransform) -> Content
 
   var body: some View {
     GeometryReader { geo in
-      let t = transform(container: geo.size)
-      content()
+      content(transform(container: geo.size))
         .frame(width: geo.size.width, height: geo.size.height)
-        .scaleEffect(t.scale)
-        .offset(t.offset)
-        .animation(.easeOut(duration: 0.3), value: t.scale)
-        .animation(.easeOut(duration: 0.3), value: t.offset)
     }
   }
 
-  private func transform(container: CGSize) -> (scale: CGFloat, offset: CGSize) {
+  private func transform(container: CGSize) -> ZoomTransform {
     guard let crop, let imageSize, imageSize.width > 0, container.width > 0 else {
-      return (1, .zero)
+      return ZoomTransform()
     }
     let video = AVMakeRect(aspectRatio: imageSize, insideRect: CGRect(origin: .zero, size: container))
     let region = CGRect(
       x: video.minX + crop.minX * video.width, y: video.minY + crop.minY * video.height,
       width: crop.width * video.width, height: crop.height * video.height)
-    guard region.width > 0, region.height > 0 else { return (1, .zero) }
+    guard region.width > 0, region.height > 0 else { return ZoomTransform() }
     let scale = min(max(min(container.width / region.width, container.height / region.height), 1), 4)
     let center = CGPoint(x: container.width / 2, y: container.height / 2)
     var offset = CGSize(
@@ -435,59 +450,77 @@ struct MeViewZoom<Content: View>: View {
     } else {
       offset.height = 0
     }
-    return (scale, offset)
+    return ZoomTransform(scale: scale, offset: offset)
+  }
+}
+
+/// Hosts one video layer (player or camera preview) and applies the zoom by resizing that layer's frame.
+final class VideoLayerHostView: UIView {
+  var zoom = ZoomTransform() {
+    didSet { if zoom != oldValue { setNeedsLayout() } }
+  }
+  var videoLayer: CALayer? {
+    didSet {
+      guard videoLayer !== oldValue else { return }
+      oldValue?.removeFromSuperlayer()
+      if let videoLayer {
+        videoLayer.frame = zoom.layerFrame(in: bounds.size)
+        layer.addSublayer(videoLayer)
+      }
+    }
+  }
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    clipsToBounds = true
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    guard let videoLayer else { return }
+    CATransaction.begin()
+    CATransaction.setAnimationDuration(0.3)
+    videoLayer.frame = zoom.layerFrame(in: bounds.size)
+    CATransaction.commit()
   }
 }
 
 /// AVPlayerLayer host so the overlay can be laid out on top of the aspect-fit video.
 struct PlayerView: UIViewRepresentable {
   let player: AVPlayer
+  var zoom = ZoomTransform()
 
-  final class LayerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-  }
-
-  func makeUIView(context: Context) -> LayerView {
-    let view = LayerView()
-    view.playerLayer.player = player
-    view.playerLayer.videoGravity = .resizeAspect
+  func makeUIView(context: Context) -> VideoLayerHostView {
+    let view = VideoLayerHostView()
+    let playerLayer = AVPlayerLayer(player: player)
+    playerLayer.videoGravity = .resizeAspect
+    view.videoLayer = playerLayer
+    view.zoom = zoom
     return view
   }
 
-  func updateUIView(_ uiView: LayerView, context: Context) {}
+  func updateUIView(_ uiView: VideoLayerHostView, context: Context) {
+    uiView.zoom = zoom
+  }
 }
 
 /// Hosts the camera preview layer, resized with the view.
 struct CameraPreviewView: UIViewRepresentable {
   let previewLayer: AVCaptureVideoPreviewLayer?
+  var zoom = ZoomTransform()
 
-  final class HostView: UIView {
-    var previewLayer: AVCaptureVideoPreviewLayer? {
-      didSet {
-        guard previewLayer !== oldValue else { return }
-        oldValue?.removeFromSuperlayer()
-        if let previewLayer {
-          previewLayer.frame = bounds
-          layer.addSublayer(previewLayer)
-        }
-      }
-    }
-
-    override func layoutSubviews() {
-      super.layoutSubviews()
-      previewLayer?.frame = bounds
-    }
-  }
-
-  func makeUIView(context: Context) -> HostView {
-    let view = HostView()
-    view.previewLayer = previewLayer
+  func makeUIView(context: Context) -> VideoLayerHostView {
+    let view = VideoLayerHostView()
+    view.videoLayer = previewLayer
+    view.zoom = zoom
     return view
   }
 
-  func updateUIView(_ uiView: HostView, context: Context) {
-    uiView.previewLayer = previewLayer
+  func updateUIView(_ uiView: VideoLayerHostView, context: Context) {
+    uiView.videoLayer = previewLayer
+    uiView.zoom = zoom
   }
 }
 
