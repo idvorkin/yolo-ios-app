@@ -101,6 +101,34 @@ Why: the seven-second playback offset after trimming was found and fixed from th
 
 **Question:** worth a "report this set" button that bundles the log and the clip?
 
+## What Igor asked for (2026-09-12 review)
+
+Answers to the open questions above: no countdown (trim afterwards is enough); show only the final count; the four
+checkpoints are right; keep the web gallery order; keep the zoom when stepping; no wrist speed; save clean video;
+add a report button. Slow motion at the bottom of the swing: not wanted.
+
+### 11. Me view (top priority) — building
+
+You're a small figure in a wide frame. Tap the person icon and the video zooms so you fill the screen, skeleton and
+all. On a replayed clip the zoom is one steady region that covers you through the whole set (the web app's crop).
+Live, it eases toward wherever you've been in the last few seconds.
+
+### 12. Recents — queued
+
+A gallery of clips you've analyzed before, so you never hunt through Photos. Add and remove entries yourself.
+
+### 13. Keep the music playing — queued
+
+Opening the camera shouldn't pause your playlist.
+
+### 14. Date and time — queued
+
+When you're watching something that isn't live, show when it was recorded.
+
+### 15. Report this set — queued
+
+One button that bundles the log and the clip for the developer.
+
 ## Candidates, not built
 
 Countdown before recording · landscape camera · wrist speed and height setting · per-set summary (best, worst,

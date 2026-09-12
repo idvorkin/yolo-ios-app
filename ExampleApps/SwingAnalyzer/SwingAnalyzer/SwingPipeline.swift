@@ -30,7 +30,8 @@ final class SwingPipeline: @unchecked Sendable {
     }
     let swing = keypoints.map { analyzer.process(keypoints: $0, time: time, image: image) }
     let frame = FrameRecord(
-      time: time, imageSize: result.orig_shape, keypoints: keypoints, swing: swing)
+      time: time, imageSize: result.orig_shape, keypoints: keypoints,
+      box: personIndex.map { result.boxes[$0].xywhn }, swing: swing)
     track.append(frame)
     if let rep = swing?.completedRep { reps.append(rep) }
     return frame
@@ -47,10 +48,28 @@ final class SwingPipeline: @unchecked Sendable {
     return pipeline
   }
 
+  /// One crop covering the person everywhere in the track (the web app's "stable crop region"): the union of
+  /// every frame's box, padded, so playback can stay zoomed in without following the person frame by frame.
+  var stableCrop: CGRect? {
+    PersonCrop.padded(union: track.frames.compactMap(\.box))
+  }
+
   /// The span where reps happened, padded, clipped to `duration`. Nil when no rep was detected.
   func repSpan(padding: Double, duration: Double) -> (start: Double, end: Double)? {
     guard let first = reps.first, let last = reps.last else { return nil }
     return (max(0, first.startTime - padding), min(duration, last.endTime + padding))
+  }
+}
+
+enum PersonCrop {
+  /// Pads a union box 1.4× wide and 1.3× tall about its center (web app defaults) and clamps it to the image.
+  static func padded(union boxes: [CGRect]) -> CGRect? {
+    guard let first = boxes.first else { return nil }
+    let union = boxes.dropFirst().reduce(first) { $0.union($1) }
+    let padded = CGRect(
+      x: union.midX - union.width * 0.7, y: union.midY - union.height * 0.65,
+      width: union.width * 1.4, height: union.height * 1.3)
+    return padded.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
   }
 }
 

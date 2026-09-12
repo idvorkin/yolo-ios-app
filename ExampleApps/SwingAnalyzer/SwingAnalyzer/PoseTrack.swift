@@ -10,6 +10,8 @@ struct FrameRecord {
   let time: Double
   let imageSize: CGSize
   let keypoints: Keypoints?
+  /// Tracked person's box, normalized to the image (nil when nobody was detected).
+  let box: CGRect?
   let swing: SwingFrameResult?
 }
 
@@ -42,7 +44,9 @@ final class PoseTrack {
   func shifted(toStartAt start: Double, end: Double) -> PoseTrack {
     let track = PoseTrack()
     track.frames = frames.filter { $0.time >= start && $0.time <= end }.map {
-      FrameRecord(time: $0.time - start, imageSize: $0.imageSize, keypoints: $0.keypoints, swing: $0.swing)
+      FrameRecord(
+        time: $0.time - start, imageSize: $0.imageSize, keypoints: $0.keypoints, box: $0.box,
+        swing: $0.swing)
     }
     return track
   }

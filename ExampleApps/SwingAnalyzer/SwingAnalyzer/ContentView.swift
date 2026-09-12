@@ -21,6 +21,7 @@ struct ContentView: View {
   @State private var scrubTime = 0.0
   @State private var isScrubbing = false
   @AppStorage("showSkeleton") private var showSkeleton = true
+  @AppStorage("meView") private var meView = true
 
   private var busy: Bool { session.activity != .idle && session.source != .camera }
 
@@ -29,12 +30,18 @@ struct ContentView: View {
       hud
       ZStack {
         Color.black
-        if session.source == .camera {
-          CameraPreviewView(previewLayer: session.cameraPreviewLayer)
-        } else {
-          PlayerView(player: session.player)
+        MeViewZoom(
+          crop: meView ? session.personCrop : nil, imageSize: session.latestFrame?.imageSize
+        ) {
+          ZStack {
+            if session.source == .camera {
+              CameraPreviewView(previewLayer: session.cameraPreviewLayer)
+            } else {
+              PlayerView(player: session.player)
+            }
+            if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
+          }
         }
-        if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
         if case .working(let label, let progress) = session.activity, session.source != .camera {
           VStack(spacing: 8) {
             ProgressView(value: progress).frame(width: 160)
@@ -46,6 +53,7 @@ struct ContentView: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .clipped()
       if !session.reps.isEmpty && session.source != .camera {
         RepGalleryWidget(
           reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase,
@@ -115,17 +123,27 @@ struct ContentView: View {
         }
       }
 
-      HStack(spacing: 6) {
+      HStack(spacing: 5) {
         ForEach(SwingPhase.allCases, id: \.self) { phase in
           let active = session.latestFrame?.swing?.phase == phase
           Text(phase.rawValue.uppercased())
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10).padding(.vertical, 4)
+            .font(.caption2.weight(.semibold))
+            .fixedSize()
+            .padding(.horizontal, 8).padding(.vertical, 4)
             .background(active ? Color.accentColor : Color(.secondarySystemFill))
             .foregroundStyle(active ? .white : .secondary)
             .clipShape(Capsule())
         }
         Spacer()
+        Button {
+          meView.toggle()
+        } label: {
+          Image(systemName: meView ? "person.crop.square.fill" : "person.crop.square")
+            .font(.title3)
+            .foregroundStyle(meView ? Color.accentColor : .secondary)
+        }
+        .accessibilityLabel(meView ? "Show whole frame" : "Zoom to me")
+        .padding(.trailing, 6)
         Button {
           showSkeleton.toggle()
         } label: {
@@ -316,6 +334,57 @@ struct ContentView: View {
       return
     }
     session.load(url: URL(fileURLWithPath: path))
+  }
+}
+
+/// Scales and pans its content so `crop` (a normalized rect in image space) fills the container, keeping the video
+/// and overlay together. With no crop it shows the whole aspect-fit frame.
+struct MeViewZoom<Content: View>: View {
+  let crop: CGRect?
+  let imageSize: CGSize?
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    GeometryReader { geo in
+      let t = transform(container: geo.size)
+      content()
+        .frame(width: geo.size.width, height: geo.size.height)
+        .scaleEffect(t.scale)
+        .offset(t.offset)
+        .animation(.easeOut(duration: 0.3), value: t.scale)
+        .animation(.easeOut(duration: 0.3), value: t.offset)
+    }
+  }
+
+  private func transform(container: CGSize) -> (scale: CGFloat, offset: CGSize) {
+    guard let crop, let imageSize, imageSize.width > 0, container.width > 0 else {
+      return (1, .zero)
+    }
+    let video = AVMakeRect(aspectRatio: imageSize, insideRect: CGRect(origin: .zero, size: container))
+    let region = CGRect(
+      x: video.minX + crop.minX * video.width, y: video.minY + crop.minY * video.height,
+      width: crop.width * video.width, height: crop.height * video.height)
+    guard region.width > 0, region.height > 0 else { return (1, .zero) }
+    let scale = min(max(min(container.width / region.width, container.height / region.height), 1), 4)
+    let center = CGPoint(x: container.width / 2, y: container.height / 2)
+    var offset = CGSize(
+      width: (center.x - region.midX) * scale, height: (center.y - region.midY) * scale)
+    // Keep the scaled video covering the container where it can, so we don't pan into black.
+    let scaledLeft = center.x + (video.minX - center.x) * scale
+    let scaledRight = center.x + (video.maxX - center.x) * scale
+    if scaledRight - scaledLeft >= container.width {
+      offset.width = min(max(offset.width, container.width - scaledRight), -scaledLeft)
+    } else {
+      offset.width = 0
+    }
+    let scaledTop = center.y + (video.minY - center.y) * scale
+    let scaledBottom = center.y + (video.maxY - center.y) * scale
+    if scaledBottom - scaledTop >= container.height {
+      offset.height = min(max(offset.height, container.height - scaledBottom), -scaledTop)
+    } else {
+      offset.height = 0
+    }
+    return (scale, offset)
   }
 }
 

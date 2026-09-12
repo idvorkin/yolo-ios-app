@@ -43,6 +43,8 @@ final class VideoPoseSession: NSObject, ObservableObject {
   @Published private(set) var cameraPreviewLayer: AVCaptureVideoPreviewLayer?
   @Published private(set) var cameraPosition: AVCaptureDevice.Position = .back
   @Published private(set) var canSave = false
+  /// Normalized image rect to zoom to for the "me view": stable over a replayed track, slowly adapting while live.
+  @Published private(set) var personCrop: CGRect?
   @Published var rate: Float = 1.0 {
     didSet { if isPlaying { player.rate = rate } }
   }
@@ -65,6 +67,7 @@ final class VideoPoseSession: NSObject, ObservableObject {
   private var cameraFramesDelivered = 0
   private var cameraFramesAnalyzed = 0
 
+  private var recentBoxes: [(time: Double, box: CGRect)] = []
   private var currentFileURL: URL?
   private var trimmedURL: URL?
   private var pendingLoadURL: URL?
@@ -211,6 +214,8 @@ final class VideoPoseSession: NSObject, ObservableObject {
     lastQuality = pipeline.reps.last?.quality
     latestFrame = pipeline.track.frames.first
     lastLoggedPhase = nil
+    recentBoxes = []
+    personCrop = pipeline.stableCrop
   }
 
   func play() {
@@ -357,6 +362,7 @@ final class VideoPoseSession: NSObject, ObservableObject {
       FrameImage.thumbnail(from: pending.pixelBuffer)
     }
     show(frame)
+    updateLiveCrop(frame)
     let personConf = result.boxes.map(\.conf).max()
     log.frame(
       frame, source: source == .camera ? "live" : "file", inferenceMs: result.inferenceMs, fps: fps,
@@ -366,6 +372,23 @@ final class VideoPoseSession: NSObject, ObservableObject {
       lastQuality = rep.quality
       log.rep(rep, source: source == .camera ? "live" : "file")
     }
+  }
+
+  /// While inferring live, zoom to the union of the last few seconds of boxes, eased so it doesn't jump.
+  private func updateLiveCrop(_ frame: FrameRecord) {
+    if let box = frame.box { recentBoxes.append((frame.time, box)) }
+    recentBoxes.removeAll { $0.time < frame.time - 4 }
+    guard let target = PersonCrop.padded(union: recentBoxes.map(\.box)) else { return }
+    guard let current = personCrop else {
+      personCrop = target
+      return
+    }
+    let a: CGFloat = 0.15
+    personCrop = CGRect(
+      x: current.minX + (target.minX - current.minX) * a,
+      y: current.minY + (target.minY - current.minY) * a,
+      width: current.width + (target.width - current.width) * a,
+      height: current.height + (target.height - current.height) * a)
   }
 
   private func show(_ frame: FrameRecord) {
