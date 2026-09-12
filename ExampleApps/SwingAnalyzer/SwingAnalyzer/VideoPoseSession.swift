@@ -314,6 +314,11 @@ final class VideoPoseSession: NSObject, ObservableObject {
     lastLoggedPhase = nil
     recentBoxes = []
     personCrop = pipeline.stableCrop
+    if let crop = personCrop {
+      log.event(
+        "crop",
+        ["x": crop.minX, "y": crop.minY, "w": crop.width, "h": crop.height, "frames": pipeline.track.frames.count])
+    }
   }
 
   func play() {

@@ -57,10 +57,16 @@ final class SwingPipeline: @unchecked Sendable {
     return pipeline
   }
 
-  /// One crop covering the person everywhere in the track (the web app's "stable crop region"): the union of
-  /// every frame's box, padded, so playback can stay zoomed in without following the person frame by frame.
+  /// One crop covering the person through the set, so playback stays zoomed without following frame by frame.
+  /// Only frames inside the rep span count (walking in and out of frame would otherwise widen it to the whole
+  /// picture), and the edges are 5th/95th percentiles so a single mis-detection can't blow it up.
   var stableCrop: CGRect? {
-    PersonCrop.padded(union: track.frames.compactMap(\.box))
+    var frames = track.frames
+    if let first = reps.first, let last = reps.last {
+      let inSet = frames.filter { $0.time >= first.startTime - 0.5 && $0.time <= last.endTime + 0.5 }
+      if !inSet.isEmpty { frames = inSet }
+    }
+    return PersonCrop.padded(robustUnion: frames.compactMap(\.box))
   }
 
   /// The span where reps happened, padded, clipped to `duration`. Nil when no rep was detected.
@@ -74,10 +80,27 @@ enum PersonCrop {
   /// Pads a union box 1.4× wide and 1.3× tall about its center (web app defaults) and clamps it to the image.
   static func padded(union boxes: [CGRect]) -> CGRect? {
     guard let first = boxes.first else { return nil }
-    let union = boxes.dropFirst().reduce(first) { $0.union($1) }
+    return padded(box: boxes.dropFirst().reduce(first) { $0.union($1) })
+  }
+
+  /// Like `padded(union:)` but the box edges are the 5th/95th percentiles across frames, not the extremes.
+  static func padded(robustUnion boxes: [CGRect]) -> CGRect? {
+    guard boxes.count >= 10 else { return padded(union: boxes) }
+    func percentile(_ values: [CGFloat], _ p: Double) -> CGFloat {
+      let sorted = values.sorted()
+      return sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))]
+    }
+    let minX = percentile(boxes.map(\.minX), 0.05)
+    let maxX = percentile(boxes.map(\.maxX), 0.95)
+    let minY = percentile(boxes.map(\.minY), 0.05)
+    let maxY = percentile(boxes.map(\.maxY), 0.95)
+    return padded(box: CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
+  }
+
+  private static func padded(box: CGRect) -> CGRect {
     let padded = CGRect(
-      x: union.midX - union.width * 0.7, y: union.midY - union.height * 0.65,
-      width: union.width * 1.4, height: union.height * 1.3)
+      x: box.midX - box.width * 0.7, y: box.midY - box.height * 0.65,
+      width: box.width * 1.4, height: box.height * 1.3)
     return padded.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
   }
 }
