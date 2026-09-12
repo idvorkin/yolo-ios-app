@@ -3,6 +3,8 @@
 Kettlebell swing form analysis on top of the `UltralyticsYOLO` pose model. A native port of the analysis core and
 UX from [idvorkin/swing-analyzer](https://github.com/idvorkin/swing-analyzer).
 
+User stories with per-feature verification status: [docs/USER_STORIES.md](docs/USER_STORIES.md).
+
 ## What it does
 
 - **Live camera.** Records 720p while running `yolo26n-pose` and the swing state machine live for the HUD
