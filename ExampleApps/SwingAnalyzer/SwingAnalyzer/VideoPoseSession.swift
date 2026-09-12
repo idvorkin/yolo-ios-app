@@ -293,13 +293,55 @@ final class VideoPoseSession: NSObject, ObservableObject {
     log.event("install_item", ["url": url.lastPathComponent, "track_frames": pipeline.track.frames.count])
     Task {
       duration = (try? await asset.load(.duration).seconds) ?? 0
-      if let track = try? await asset.loadTracks(withMediaType: .video).first,
-        let rate = try? await track.load(.nominalFrameRate), rate > 0
-      {
-        frameDuration = 1 / Double(rate)
+      if let track = try? await asset.loadTracks(withMediaType: .video).first {
+        if let rate = try? await track.load(.nominalFrameRate), rate > 0 {
+          frameDuration = 1 / Double(rate)
+        }
+        await logVideoTrack(track, url: url)
       }
     }
     startDisplayLink()
+  }
+
+  /// Records what the player was handed: codec, size, color tags, HDR flag, and the screen's EDR headroom. Used to
+  /// diagnose washed-out HDR playback without a debugger attached.
+  private func logVideoTrack(_ track: AVAssetTrack, url: URL) async {
+    var fields: [String: Any] = ["url": url.lastPathComponent]
+    if let size = try? await track.load(.naturalSize) {
+      fields["width"] = size.width
+      fields["height"] = size.height
+    }
+    if let descriptions = try? await track.load(.formatDescriptions), let format = descriptions.first {
+      let sub = CMFormatDescriptionGetMediaSubType(format)
+      fields["codec"] = String(
+        bytes: [UInt8(sub >> 24 & 0xFF), UInt8(sub >> 16 & 0xFF), UInt8(sub >> 8 & 0xFF), UInt8(sub & 0xFF)],
+        encoding: .ascii) ?? "\(sub)"
+      let ext = CMFormatDescriptionGetExtensions(format) as? [String: Any] ?? [:]
+      fields["primaries"] = ext[kCMFormatDescriptionExtension_ColorPrimaries as String] ?? "none"
+      fields["transfer"] = ext[kCMFormatDescriptionExtension_TransferFunction as String] ?? "none"
+      fields["matrix"] = ext[kCMFormatDescriptionExtension_YCbCrMatrix as String] ?? "none"
+      fields["bit_depth"] = ext[kCMFormatDescriptionExtension_BitsPerComponent as String] ?? "n/a"
+    }
+    fields["hdr"] = track.hasMediaCharacteristic(.containsHDRVideo)
+    fields["edr_headroom"] = UIScreen.main.currentEDRHeadroom
+    fields["edr_potential"] = UIScreen.main.potentialEDRHeadroom
+    fields["low_power"] = ProcessInfo.processInfo.isLowPowerModeEnabled
+    fields["display_gamut"] = UIScreen.main.traitCollection.displayGamut == .P3 ? "P3" : "sRGB"
+    log.event("video_track", fields)
+  }
+
+  /// Player layer state, reported by the view once the layer is ready to display.
+  func logPlayerLayer(_ layer: AVPlayerLayer, container: CGSize) {
+    log.event(
+      "player_layer",
+      [
+        "ready": layer.isReadyForDisplay, "video_rect_w": layer.videoRect.width,
+        "video_rect_h": layer.videoRect.height, "frame_w": layer.frame.width, "frame_h": layer.frame.height,
+        "container_w": container.width, "container_h": container.height,
+        "gravity": layer.videoGravity.rawValue, "edr_headroom": UIScreen.main.currentEDRHeadroom,
+        "rate": player.rate, "status": player.currentItem?.status.rawValue ?? -1,
+        "has_composition": player.currentItem?.videoComposition != nil,
+      ])
   }
 
   private func adopt(pipeline: SwingPipeline) {

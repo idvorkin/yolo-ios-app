@@ -40,7 +40,7 @@ struct ContentView: View {
             if session.source == .camera {
               CameraPreviewView(previewLayer: session.cameraPreviewLayer, zoom: zoom)
             } else {
-              PlayerView(player: session.player, zoom: zoom)
+              PlayerView(player: session.player, zoom: zoom, onReady: session.logPlayerLayer)
             }
             if showSkeleton {
               PoseOverlayView(frame: session.latestFrame)
@@ -491,6 +491,13 @@ final class VideoLayerHostView: UIView {
 struct PlayerView: UIViewRepresentable {
   let player: AVPlayer
   var zoom = ZoomTransform()
+  var onReady: ((AVPlayerLayer, CGSize) -> Void)? = nil
+
+  final class Coordinator {
+    var observation: NSKeyValueObservation?
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
 
   func makeUIView(context: Context) -> VideoLayerHostView {
     let view = VideoLayerHostView()
@@ -498,6 +505,13 @@ struct PlayerView: UIViewRepresentable {
     playerLayer.videoGravity = .resizeAspect
     view.videoLayer = playerLayer
     view.zoom = zoom
+    if let onReady {
+      context.coordinator.observation = playerLayer.observe(\.isReadyForDisplay, options: [.new]) {
+        [weak view] layer, _ in
+        guard layer.isReadyForDisplay, let view else { return }
+        DispatchQueue.main.async { onReady(layer, view.bounds.size) }
+      }
+    }
     return view
   }
 
