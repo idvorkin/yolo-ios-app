@@ -11,6 +11,7 @@
 import AVFoundation
 import Combine
 import CoreMedia
+import Photos
 import QuartzCore
 import UIKit
 import UltralyticsYOLO
@@ -26,8 +27,16 @@ final class VideoPoseSession: NSObject, ObservableObject {
     case working(String, progress: Double?)
   }
 
+  /// Where a loaded clip came from; decides how Recents keeps it.
+  enum Origin {
+    case photos(identifier: String)
+    case file
+    case recording
+  }
+
   let player = AVPlayer()
   let log = SessionLog()
+  let recents = RecentsStore()
 
   @Published private(set) var source: Source = .none
   @Published private(set) var activity: Activity = .idle
@@ -70,6 +79,9 @@ final class VideoPoseSession: NSObject, ObservableObject {
   private var recentBoxes: [(time: Double, box: CGRect)] = []
   private var currentFileURL: URL?
   private var trimmedURL: URL?
+  private var currentOrigin: Origin = .file
+  private var currentEntryID: String?
+  private var currentRecordedAt: Date?
   private var pendingLoadURL: URL?
   private var debugFramesToLog = 0
   private var lastLoggedPhase: SwingPhase?
@@ -128,7 +140,7 @@ final class VideoPoseSession: NSObject, ObservableObject {
   // MARK: - Files
 
   /// Imports a video: shows it paused, runs the offline pass, then plays with the stored track.
-  func load(url: URL) {
+  func load(url: URL, origin: Origin = .file, recordedAt: Date? = nil) {
     stopCamera()
     guard predictor != nil else {
       pendingLoadURL = url  // model still loading; retried from loadModel's completion
@@ -137,9 +149,95 @@ final class VideoPoseSession: NSObject, ObservableObject {
     }
     currentFileURL = url
     trimmedURL = nil
+    currentOrigin = origin
+    currentEntryID = nil
+    currentRecordedAt = recordedAt
     canSave = true
     log.event("load", ["url": url.lastPathComponent, "source": "file"])
     Task { await analyzeAndPlay(url: url) }
+  }
+
+  /// A clip picked from Photos: keep a pointer to the asset when the library lets us read it, else copy the file.
+  func importPicked(url: URL, photosIdentifier: String?) {
+    let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    if let photosIdentifier, status == .authorized || status == .limited,
+      let date = RecentsStore.photosAssetDate(identifier: photosIdentifier)
+    {
+      load(url: url, origin: .photos(identifier: photosIdentifier), recordedAt: date)
+    } else {
+      load(url: url, origin: .file, recordedAt: Self.fileDate(url))
+    }
+  }
+
+  /// Reopens a Recents entry with its stored analysis: no inference, instant.
+  func open(recent entry: RecentEntry) {
+    stopCamera()
+    Task {
+      guard let url = await recents.clipURL(for: entry) else {
+        statusMessage = entry.isInPhotos ? "That clip is no longer in Photos" : "That clip's file is missing"
+        log.event("recents_missing", ["id": entry.id])
+        return
+      }
+      guard let pipeline = recents.loadPipeline(for: entry) else {
+        statusMessage = "Stored analysis unreadable; re-analyzing"
+        load(url: url, origin: entry.isInPhotos ? .photos(identifier: photosID(entry)) : .file, recordedAt: entry.recordedAt)
+        return
+      }
+      currentFileURL = url
+      trimmedURL = nil
+      currentOrigin = entry.isInPhotos ? .photos(identifier: photosID(entry)) : .file
+      currentEntryID = entry.id
+      currentRecordedAt = entry.recordedAt
+      canSave = !entry.isInPhotos
+      installPlayerItem(url: url, pipeline: pipeline)
+      statusMessage = recordedLine(reps: pipeline.reps.count)
+      log.event("recents_open", ["id": entry.id, "reps": pipeline.reps.count])
+      play()
+    }
+  }
+
+  private func photosID(_ entry: RecentEntry) -> String {
+    if case .photos(let identifier) = entry.source { return identifier }
+    return ""
+  }
+
+  private static func fileDate(_ url: URL) -> Date? {
+    (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+  }
+
+  private static let recordedFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateStyle = .medium
+    f.timeStyle = .short
+    return f
+  }()
+
+  private func recordedLine(reps: Int) -> String {
+    let when = currentRecordedAt.map { "Recorded " + Self.recordedFormatter.string(from: $0) } ?? "Clip"
+    return "\(when) · \(reps) reps"
+  }
+
+  /// Writes the current clip and analysis into Recents (new entry, or updates the open one after a trim).
+  private func rememberCurrent(clipURL: URL) {
+    let id = currentEntryID ?? UUID().uuidString
+    let source: RecentEntry.Source
+    switch currentOrigin {
+    case .photos(let identifier) where trimmedURL == nil:
+      source = .photos(identifier: identifier)
+    default:
+      source = .file(name: "clip." + clipURL.pathExtension)
+    }
+    let thumbnail =
+      pipeline.reps.first?.positions[.top]?.image ?? pipeline.reps.first?.checkpoints.first?.image
+    do {
+      try recents.save(
+        id: id, source: source, recordedAt: currentRecordedAt ?? Date(), duration: duration,
+        pipeline: pipeline, clipURL: clipURL, thumbnail: thumbnail)
+      currentEntryID = id
+      log.event("recents_saved", ["id": id, "reps": pipeline.reps.count, "in_photos": source.isPhotos])
+    } catch {
+      log.event("error", ["where": "recents", "message": "\(error)"])
+    }
   }
 
   private func analyzeAndPlay(url: URL) async {
@@ -167,9 +265,9 @@ final class VideoPoseSession: NSObject, ObservableObject {
           "avg_infer_ms": summary.averageInferenceMs, "reps": result.reps.count,
           "fps": summary.elapsed > 0 ? Double(summary.frames) / summary.elapsed : 0,
         ])
-      statusMessage = String(
-        format: "Analyzed %d frames in %.1fs · %d reps", summary.frames, summary.elapsed,
-        result.reps.count)
+      statusMessage = recordedLine(reps: result.reps.count) + String(
+        format: " · analyzed %d frames in %.1fs", summary.frames, summary.elapsed)
+      rememberCurrent(clipURL: url)
     } catch {
       statusMessage = "Analysis failed: \(error.localizedDescription)"
       log.event("error", ["where": "offline_pass", "message": "\(error)"])
@@ -502,6 +600,9 @@ final class VideoPoseSession: NSObject, ObservableObject {
         return
       }
       currentFileURL = url
+      currentOrigin = .recording
+      currentEntryID = nil
+      currentRecordedAt = Date()
       canSave = true
       await trim(url: url, using: livePipeline, thenAnalyze: true)
     }
@@ -540,6 +641,8 @@ final class VideoPoseSession: NSObject, ObservableObject {
         installPlayerItem(
           url: clip, pipeline: analyzed.shifted(toStartAt: span.start, end: span.end))
         statusMessage = String(format: "Trimmed to %.1fs", span.end - span.start)
+        currentFileURL = clip
+        rememberCurrent(clipURL: clip)
         activity = .idle
         play()
       }
@@ -555,9 +658,14 @@ final class VideoPoseSession: NSObject, ObservableObject {
     activity = .working("Saving", progress: nil)
     Task {
       do {
-        try await VideoFile.saveToPhotos(url)
+        let identifier = try await VideoFile.saveToPhotos(url)
         statusMessage = "Saved to Photos"
         log.event("saved", ["clip": url.lastPathComponent])
+        if let identifier, let id = currentEntryID {
+          recents.markSavedToPhotos(id: id, identifier: identifier)
+          currentOrigin = .photos(identifier: identifier)
+          canSave = false
+        }
       } catch {
         statusMessage = "Save failed: \(error.localizedDescription)"
         log.event("error", ["where": "save", "message": "\(error)"])

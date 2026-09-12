@@ -108,11 +108,15 @@ enum VideoFile {
     return output
   }
 
-  static func saveToPhotos(_ url: URL) async throws {
+  /// Saves the clip to Photos and returns the new asset's local identifier.
+  static func saveToPhotos(_ url: URL) async throws -> String? {
     let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
     guard status == .authorized || status == .limited else { throw VideoFileError.photosDenied }
+    var identifier: String?
     try await PHPhotoLibrary.shared().performChanges {
-      PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+      let request = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+      identifier = request?.placeholderForCreatedAsset?.localIdentifier
     }
+    return identifier
   }
 }

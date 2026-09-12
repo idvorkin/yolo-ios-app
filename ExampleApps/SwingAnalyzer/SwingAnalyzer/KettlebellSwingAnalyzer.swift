@@ -14,7 +14,7 @@
 import UIKit
 import UltralyticsYOLO
 
-enum SwingPhase: String, CaseIterable {
+enum SwingPhase: String, CaseIterable, Codable {
   case top, connect, bottom, release
 
   /// Gallery column order: the visual start of a rep cycle first.
@@ -35,7 +35,7 @@ struct SwingThresholds {
   var releaseSpineMax = 25.0
 }
 
-struct SwingAngles {
+struct SwingAngles: Codable {
   var arm = 0.0
   var spine = 0.0
   var hip = 0.0
@@ -43,7 +43,7 @@ struct SwingAngles {
   var wristHeight = 0.0
 }
 
-struct RepQuality {
+struct RepQuality: Codable {
   let score: Int
   let hingeDepth: Double
   let lockoutAngle: Double
@@ -51,18 +51,35 @@ struct RepQuality {
   let feedback: [String]
 }
 
-/// The peak frame of one phase within a rep.
-struct RepPosition {
+/// The peak frame of one phase within a rep. The image is kept in memory only; Recents stores it as a file.
+struct RepPosition: Codable {
   let phase: SwingPhase
   let time: Double
-  let keypoints: Keypoints
+  let pose: Pose
   let angles: SwingAngles
   let score: Double
-  let image: UIImage?
+  var image: UIImage?
+
+  init(phase: SwingPhase, time: Double, pose: Pose, angles: SwingAngles, score: Double, image: UIImage?) {
+    self.phase = phase
+    self.time = time
+    self.pose = pose
+    self.angles = angles
+    self.score = score
+    self.image = image
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case phase, time, pose, angles, score
+  }
+
+  func shifted(by offset: Double) -> RepPosition {
+    RepPosition(phase: phase, time: time + offset, pose: pose, angles: angles, score: score, image: image)
+  }
 }
 
 /// A completed rep: one position per phase plus its quality score.
-struct RepRecord: Identifiable {
+struct RepRecord: Identifiable, Codable {
   let number: Int
   let positions: [SwingPhase: RepPosition]
   let quality: RepQuality
@@ -73,18 +90,11 @@ struct RepRecord: Identifiable {
   var endTime: Double { checkpoints.last?.time ?? 0 }
 
   func shifted(by offset: Double) -> RepRecord {
-    RepRecord(
-      number: number,
-      positions: positions.mapValues {
-        RepPosition(
-          phase: $0.phase, time: $0.time + offset, keypoints: $0.keypoints, angles: $0.angles,
-          score: $0.score, image: $0.image)
-      },
-      quality: quality)
+    RepRecord(number: number, positions: positions.mapValues { $0.shifted(by: offset) }, quality: quality)
   }
 }
 
-struct SwingFrameResult {
+struct SwingFrameResult: Codable {
   let phase: SwingPhase
   let repCount: Int
   let angles: SwingAngles
@@ -131,8 +141,8 @@ final class KettlebellSwingAnalyzer {
 
   /// Advances the state machine by one frame. Joints are chosen per frame by confidence (see SwingSkeleton), so
   /// facing direction and handedness don't matter. `image` is called only when this frame becomes a phase peak.
-  func process(keypoints: Keypoints, time: Double, image: () -> UIImage?) -> SwingFrameResult {
-    let skeleton = SwingSkeleton(keypoints: keypoints)
+  func process(pose: Pose, time: Double, image: () -> UIImage?) -> SwingFrameResult {
+    let skeleton = SwingSkeleton(pose: pose)
     let angles = SwingAngles(
       arm: skeleton.armToVerticalAngle,
       spine: skeleton.spineAngle,
@@ -146,7 +156,7 @@ final class KettlebellSwingAnalyzer {
     }
 
     updateMetrics(angles)
-    updatePhasePeak(keypoints: keypoints, time: time, angles: angles, image: image)
+    updatePhasePeak(pose: pose, time: time, angles: angles, image: image)
     framesInPhase += 1
 
     var completedRep: RepRecord?
@@ -186,14 +196,12 @@ final class KettlebellSwingAnalyzer {
   // MARK: - Peaks
 
   /// CONNECT and RELEASE keep the first qualifying frame (timing matters); TOP and BOTTOM keep the best extreme.
-  private func updatePhasePeak(
-    keypoints: Keypoints, time: Double, angles: SwingAngles, image: () -> UIImage?
-  ) {
+  private func updatePhasePeak(pose: Pose, time: Double, angles: SwingAngles, image: () -> UIImage?) {
     let score = peakScore(for: phase, angles: angles)
     let isTimingPhase = phase == .connect || phase == .release
     if let current = currentPhasePeak, isTimingPhase || score <= current.score { return }
     currentPhasePeak = RepPosition(
-      phase: phase, time: time, keypoints: keypoints, angles: angles, score: score, image: image())
+      phase: phase, time: time, pose: pose, angles: angles, score: score, image: image())
   }
 
   private func peakScore(for phase: SwingPhase, angles: SwingAngles) -> Double {

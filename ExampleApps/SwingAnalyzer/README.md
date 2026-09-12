@@ -49,7 +49,7 @@ just run-device                         # connected iPhone (needs an Apple ID si
 ```
 
 Test hooks for simulator runs (no UI tapping needed): `SWING_VIDEO=/path` auto-loads a file and
-`SWING_AUTO_TRIM=1` trims it right after the first analysis. Pass them through `simctl` as
+`SWING_AUTO_TRIM=1` trims it right after the first analysis, and `SWING_OPEN_RECENT=1` reopens the newest Recents entry. Pass them through `simctl` as
 `SIMCTL_CHILD_SWING_VIDEO` / `SIMCTL_CHILD_SWING_AUTO_TRIM`.
 
 Sample swing videos live in

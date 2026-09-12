@@ -17,18 +17,17 @@ enum PoseDrawing {
     (.rightEye, .rightEar), (.leftEar, .leftShoulder), (.rightEar, .rightShoulder),
   ]
 
-  /// Draws `keypoints` (normalized coordinates) into `rect`, the on-screen rect of the source image.
+  /// Draws `pose` (normalized coordinates) into `rect`, the on-screen rect of the source image.
   static func draw(
-    _ context: GraphicsContext, keypoints: Keypoints, in rect: CGRect, lineWidth: CGFloat = 1.5
+    _ context: GraphicsContext, pose: Pose, in rect: CGRect, lineWidth: CGFloat = 1.5
   ) {
     func mapped(_ k: CocoKeypoint) -> CGPoint? {
       let i = k.rawValue
-      guard i < keypoints.xyn.count, i < keypoints.conf.count,
-        keypoints.conf[i] > SwingSkeleton.visibleThreshold
+      guard i < pose.xyn.count, i < pose.conf.count, pose.conf[i] > SwingSkeleton.visibleThreshold
       else { return nil }
       return CGPoint(
-        x: rect.minX + CGFloat(keypoints.xyn[i].x) * rect.width,
-        y: rect.minY + CGFloat(keypoints.xyn[i].y) * rect.height)
+        x: rect.minX + CGFloat(pose.xyn[i].x) * rect.width,
+        y: rect.minY + CGFloat(pose.xyn[i].y) * rect.height)
     }
 
     for (a, b) in bones {
@@ -67,10 +66,10 @@ struct PoseOverlayView: View {
 
   var body: some View {
     Canvas { context, size in
-      guard let frame, let keypoints = frame.keypoints, frame.imageSize.width > 0 else { return }
+      guard let frame, let pose = frame.pose, frame.imageSize.width > 0 else { return }
       let rect = AVMakeRect(
         aspectRatio: frame.imageSize, insideRect: CGRect(origin: .zero, size: size))
-      PoseDrawing.draw(context, keypoints: keypoints, in: rect)
+      PoseDrawing.draw(context, pose: pose, in: rect)
     }
     .allowsHitTesting(false)
   }
@@ -89,7 +88,7 @@ struct PoseThumbnail: View {
           Canvas { context, size in
             let rect = AVMakeRect(
               aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: size))
-            PoseDrawing.draw(context, keypoints: position.keypoints, in: rect, lineWidth: 1)
+            PoseDrawing.draw(context, pose: position.pose, in: rect, lineWidth: 1)
           }
         } else {
           Image(systemName: "figure.strengthtraining.traditional")

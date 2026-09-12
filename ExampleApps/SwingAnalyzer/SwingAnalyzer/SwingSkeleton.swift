@@ -24,9 +24,9 @@ struct SwingSkeleton {
   private let points: [CGPoint]
   private let conf: [Float]
 
-  init(keypoints: Keypoints) {
-    points = keypoints.xy.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }
-    conf = keypoints.conf
+  init(pose: Pose) {
+    points = pose.xy.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }
+    conf = pose.conf
   }
 
   func point(_ k: CocoKeypoint, minConf: Float = SwingSkeleton.visibleThreshold) -> CGPoint? {

@@ -5,6 +5,7 @@
 //  Launch with the SWING_VIDEO environment variable set to a file path to auto-load a video (simulator testing).
 
 import AVFoundation
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -14,6 +15,7 @@ struct ContentView: View {
   @State private var pickerItem: PhotosPickerItem?
   @State private var showFileImporter = false
   @State private var showPhotosPicker = false
+  @State private var showRecents = false
   @State private var showGallery = false
   @State private var showKeyframeViewer = false
   @State private var focusedPhase: SwingPhase?
@@ -72,14 +74,20 @@ struct ContentView: View {
       guard let item else { return }
       Task {
         if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-          session.load(url: movie.url)
+          session.importPicked(url: movie.url, photosIdentifier: item.itemIdentifier)
         }
+        pickerItem = nil
       }
     }
     .onChange(of: session.currentTime) { _, time in
       if !isScrubbing { scrubTime = time }
     }
-    .photosPicker(isPresented: $showPhotosPicker, selection: $pickerItem, matching: .videos)
+    .photosPicker(
+      isPresented: $showPhotosPicker, selection: $pickerItem, matching: .videos,
+      photoLibrary: .shared())
+    .sheet(isPresented: $showRecents) {
+      RecentsView(store: session.recents) { session.open(recent: $0) }
+    }
     .fileImporter(
       isPresented: $showFileImporter, allowedContentTypes: [.movie, .video, .mpeg4Movie]
     ) { result in
@@ -296,7 +304,15 @@ struct ContentView: View {
         }
         Menu {
           Button {
-            showPhotosPicker = true
+            showRecents = true
+          } label: {
+            Label("Recents", systemImage: "clock.arrow.circlepath")
+          }
+          Button {
+            // Read access lets Recents point back at the asset instead of copying it.
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in
+              Task { @MainActor in showPhotosPicker = true }
+            }
           } label: {
             Label("Photos", systemImage: "photo.on.rectangle")
           }
@@ -306,7 +322,7 @@ struct ContentView: View {
             Label("Files", systemImage: "folder")
           }
         } label: {
-          Label("Import video", systemImage: "folder.badge.plus")
+          Label("Open", systemImage: "folder.badge.plus")
         }
       }
       .labelStyle(.iconOnly)
@@ -330,9 +346,12 @@ struct ContentView: View {
   }
 
   private func loadFromEnvironment() {
-    guard let path = ProcessInfo.processInfo.environment["SWING_VIDEO"], !path.isEmpty else {
+    let env = ProcessInfo.processInfo.environment
+    if env["SWING_OPEN_RECENT"] == "1", let newest = session.recents.entries.first {
+      session.open(recent: newest)  // test hook: reopen the newest Recents entry
       return
     }
+    guard let path = env["SWING_VIDEO"], !path.isEmpty else { return }
     session.load(url: URL(fileURLWithPath: path))
   }
 }

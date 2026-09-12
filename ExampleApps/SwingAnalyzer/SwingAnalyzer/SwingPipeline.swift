@@ -25,16 +25,25 @@ final class SwingPipeline: @unchecked Sendable {
   func process(result: YOLOResult, time: Double, image: () -> UIImage?) -> FrameRecord {
     // The analyzer expects a single subject: take the most confident person.
     let personIndex = result.boxes.indices.max { result.boxes[$0].conf < result.boxes[$1].conf }
-    let keypoints = personIndex.flatMap {
-      $0 < result.keypointsList.count ? result.keypointsList[$0] : nil
+    let pose = personIndex.flatMap {
+      $0 < result.keypointsList.count ? Pose(keypoints: result.keypointsList[$0]) : nil
     }
-    let swing = keypoints.map { analyzer.process(keypoints: $0, time: time, image: image) }
+    let swing = pose.map { analyzer.process(pose: $0, time: time, image: image) }
     let frame = FrameRecord(
-      time: time, imageSize: result.orig_shape, keypoints: keypoints,
+      time: time, imageSize: result.orig_shape, pose: pose,
       box: personIndex.map { result.boxes[$0].xywhn }, swing: swing)
     track.append(frame)
     if let rep = swing?.completedRep { reps.append(rep) }
     return frame
+  }
+
+  /// Rebuilds a pipeline from stored frames and reps (Recents). The analyzer state is not restored; it only
+  /// matters if inference runs on frames the track doesn't cover.
+  static func restored(frames: [FrameRecord], reps: [RepRecord]) -> SwingPipeline {
+    let pipeline = SwingPipeline()
+    pipeline.track.replaceAll(with: frames)
+    pipeline.reps = reps
+    return pipeline
   }
 
   /// A copy covering `start...end`, re-timed to start at zero (used after trimming a clip).

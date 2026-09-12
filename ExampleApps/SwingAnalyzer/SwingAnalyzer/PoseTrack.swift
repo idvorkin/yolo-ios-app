@@ -6,10 +6,10 @@
 import CoreGraphics
 import UltralyticsYOLO
 
-struct FrameRecord {
+struct FrameRecord: Codable {
   let time: Double
   let imageSize: CGSize
-  let keypoints: Keypoints?
+  let pose: Pose?
   /// Tracked person's box, normalized to the image (nil when nobody was detected).
   let box: CGRect?
   let swing: SwingFrameResult?
@@ -21,6 +21,8 @@ final class PoseTrack {
   var isEmpty: Bool { frames.isEmpty }
 
   func removeAll() { frames.removeAll() }
+
+  func replaceAll(with frames: [FrameRecord]) { self.frames = frames.sorted { $0.time < $1.time } }
 
   func append(_ frame: FrameRecord) {
     if let last = frames.last, frame.time < last.time {
@@ -45,8 +47,7 @@ final class PoseTrack {
     let track = PoseTrack()
     track.frames = frames.filter { $0.time >= start && $0.time <= end }.map {
       FrameRecord(
-        time: $0.time - start, imageSize: $0.imageSize, keypoints: $0.keypoints, box: $0.box,
-        swing: $0.swing)
+        time: $0.time - start, imageSize: $0.imageSize, pose: $0.pose, box: $0.box, swing: $0.swing)
     }
     return track
   }
