@@ -20,6 +20,7 @@ struct ContentView: View {
   @State private var focusedRep: Int?
   @State private var scrubTime = 0.0
   @State private var isScrubbing = false
+  @AppStorage("showSkeleton") private var showSkeleton = true
 
   private var busy: Bool { session.activity != .idle && session.source != .camera }
 
@@ -33,7 +34,7 @@ struct ContentView: View {
         } else {
           PlayerView(player: session.player)
         }
-        PoseOverlayView(frame: session.latestFrame)
+        if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
         if case .working(let label, let progress) = session.activity, session.source != .camera {
           VStack(spacing: 8) {
             ProgressView(value: progress).frame(width: 160)
@@ -125,6 +126,14 @@ struct ContentView: View {
             .clipShape(Capsule())
         }
         Spacer()
+        Button {
+          showSkeleton.toggle()
+        } label: {
+          Image(systemName: showSkeleton ? "eye" : "eye.slash")
+            .font(.title3)
+            .foregroundStyle(showSkeleton ? Color.accentColor : .secondary)
+        }
+        .accessibilityLabel(showSkeleton ? "Hide skeleton" : "Show skeleton")
       }
 
       HStack(spacing: 16) {

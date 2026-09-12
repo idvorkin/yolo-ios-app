@@ -8,6 +8,7 @@ import SwiftUI
 struct KeyframeViewer: View {
   @ObservedObject var session: VideoPoseSession
   @Environment(\.dismiss) private var dismiss
+  @AppStorage("showSkeleton") private var showSkeleton = true
 
   var body: some View {
     ZStack {
@@ -15,7 +16,7 @@ struct KeyframeViewer: View {
       ZoomableContainer {
         ZStack {
           PlayerView(player: session.player)
-          PoseOverlayView(frame: session.latestFrame)
+          if showSkeleton { PoseOverlayView(frame: session.latestFrame) }
         }
       }
       .ignoresSafeArea()
@@ -39,6 +40,14 @@ struct KeyframeViewer: View {
             }
           }
           Spacer()
+          Button {
+            showSkeleton.toggle()
+          } label: {
+            Image(systemName: showSkeleton ? "eye" : "eye.slash")
+              .font(.title2)
+              .opacity(showSkeleton ? 1 : 0.5)
+          }
+          .padding(.trailing, 12)
           Button {
             dismiss()
           } label: {
