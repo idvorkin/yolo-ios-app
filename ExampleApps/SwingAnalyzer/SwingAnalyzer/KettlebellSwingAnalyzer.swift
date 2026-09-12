@@ -7,11 +7,18 @@
 //  - CONNECT: arms vertical, connecting to the body before the hinge
 //  - BOTTOM: deepest hinge, arms behind the body
 //  - RELEASE: arms leaving the body after the hip snap
+//
+//  Each phase captures its peak frame (best extreme for TOP/BOTTOM, first qualifying frame for CONNECT/RELEASE)
+//  so a completed rep carries one position per phase for the gallery and navigation.
 
-import Foundation
+import UIKit
+import UltralyticsYOLO
 
 enum SwingPhase: String, CaseIterable {
   case top, connect, bottom, release
+
+  /// Gallery column order: the visual start of a rep cycle first.
+  static let displayOrder: [SwingPhase] = [.bottom, .release, .top, .connect]
 }
 
 /// Phase-transition thresholds in degrees. Defaults come from analysis of real swing videos.
@@ -44,18 +51,50 @@ struct RepQuality {
   let feedback: [String]
 }
 
+/// The peak frame of one phase within a rep.
+struct RepPosition {
+  let phase: SwingPhase
+  let time: Double
+  let keypoints: Keypoints
+  let angles: SwingAngles
+  let score: Double
+  let image: UIImage?
+}
+
+/// A completed rep: one position per phase plus its quality score.
+struct RepRecord: Identifiable {
+  let number: Int
+  let positions: [SwingPhase: RepPosition]
+  let quality: RepQuality
+
+  var id: Int { number }
+  var checkpoints: [RepPosition] { positions.values.sorted { $0.time < $1.time } }
+  var startTime: Double { checkpoints.first?.time ?? 0 }
+  var endTime: Double { checkpoints.last?.time ?? 0 }
+
+  func shifted(by offset: Double) -> RepRecord {
+    RepRecord(
+      number: number,
+      positions: positions.mapValues {
+        RepPosition(
+          phase: $0.phase, time: $0.time + offset, keypoints: $0.keypoints, angles: $0.angles,
+          score: $0.score, image: $0.image)
+      },
+      quality: quality)
+  }
+}
+
 struct SwingFrameResult {
   let phase: SwingPhase
-  let repCompleted: Bool
   let repCount: Int
   let angles: SwingAngles
-  let repQuality: RepQuality?
+  /// Present on the frame that completes a rep.
+  let completedRep: RepRecord?
 }
 
 final class KettlebellSwingAnalyzer {
   private(set) var phase: SwingPhase = .top
   private(set) var repCount = 0
-  private(set) var lastRepQuality: RepQuality?
 
   private let thresholds: SwingThresholds
   private var framesInPhase = 0
@@ -63,6 +102,9 @@ final class KettlebellSwingAnalyzer {
 
   private var wristHeightHistory: [Double] = []
   private let wristHeightWindowSize = 5
+
+  private var currentPhasePeak: RepPosition?
+  private var currentRepPeaks: [SwingPhase: RepPosition] = [:]
 
   private struct RepMetrics {
     var maxSpineAngle = 0.0
@@ -80,15 +122,17 @@ final class KettlebellSwingAnalyzer {
   func reset() {
     phase = .top
     repCount = 0
-    lastRepQuality = nil
     framesInPhase = 0
     wristHeightHistory = []
+    currentPhasePeak = nil
+    currentRepPeaks = [:]
     metrics = RepMetrics()
   }
 
   /// Advances the state machine by one frame. Always uses the right arm, matching the web analyzer;
-  /// mirror the skeleton for left-handed swings.
-  func process(_ skeleton: SwingSkeleton) -> SwingFrameResult {
+  /// mirror the skeleton for left-handed swings. `image` is called only when this frame becomes a phase peak.
+  func process(keypoints: Keypoints, time: Double, image: () -> UIImage?) -> SwingFrameResult {
+    let skeleton = SwingSkeleton(keypoints: keypoints)
     let angles = SwingAngles(
       arm: skeleton.armToVerticalAngle(preferred: .right),
       spine: skeleton.spineAngle,
@@ -102,32 +146,68 @@ final class KettlebellSwingAnalyzer {
     }
 
     updateMetrics(angles)
+    updatePhasePeak(keypoints: keypoints, time: time, angles: angles, image: image)
     framesInPhase += 1
 
-    var repCompleted = false
-    var repQuality: RepQuality?
+    var completedRep: RepRecord?
 
     switch phase {
     case .top:
-      if shouldTransitionToConnect(angles) { transition(to: .connect) }
+      if shouldTransitionToConnect(angles) {
+        finalizePhasePeak()
+        transition(to: .connect)
+      }
     case .connect:
-      if shouldTransitionToBottom(angles) { transition(to: .bottom) }
+      if shouldTransitionToBottom(angles) {
+        finalizePhasePeak()
+        transition(to: .bottom)
+      }
     case .bottom:
-      if shouldTransitionToRelease(angles) { transition(to: .release) }
+      if shouldTransitionToRelease(angles) {
+        finalizePhasePeak()
+        transition(to: .release)
+      }
     case .release:
       if shouldTransitionToTop(angles) {
+        finalizePhasePeak()
         repCount += 1
-        lastRepQuality = calculateRepQuality()
-        repQuality = lastRepQuality
-        repCompleted = true
+        completedRep = RepRecord(
+          number: repCount, positions: currentRepPeaks, quality: calculateRepQuality())
+        currentRepPeaks = [:]
         transition(to: .top)
         metrics = RepMetrics()
       }
     }
 
     return SwingFrameResult(
-      phase: phase, repCompleted: repCompleted, repCount: repCount, angles: angles,
-      repQuality: repQuality)
+      phase: phase, repCount: repCount, angles: angles, completedRep: completedRep)
+  }
+
+  // MARK: - Peaks
+
+  /// CONNECT and RELEASE keep the first qualifying frame (timing matters); TOP and BOTTOM keep the best extreme.
+  private func updatePhasePeak(
+    keypoints: Keypoints, time: Double, angles: SwingAngles, image: () -> UIImage?
+  ) {
+    let score = peakScore(for: phase, angles: angles)
+    let isTimingPhase = phase == .connect || phase == .release
+    if let current = currentPhasePeak, isTimingPhase || score <= current.score { return }
+    currentPhasePeak = RepPosition(
+      phase: phase, time: time, keypoints: keypoints, angles: angles, score: score, image: image())
+  }
+
+  private func peakScore(for phase: SwingPhase, angles: SwingAngles) -> Double {
+    switch phase {
+    case .top: return angles.arm  // highest arm = best lockout
+    case .connect: return 90 - angles.arm  // arms most vertical before the hinge
+    case .bottom: return angles.spine  // deepest hinge
+    case .release: return 90 - angles.spine  // most upright when the arms release
+    }
+  }
+
+  private func finalizePhasePeak() {
+    if let peak = currentPhasePeak { currentRepPeaks[peak.phase] = peak }
+    currentPhasePeak = nil
   }
 
   // MARK: - Transitions

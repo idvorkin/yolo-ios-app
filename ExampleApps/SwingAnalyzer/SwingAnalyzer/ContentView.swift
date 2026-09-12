@@ -1,6 +1,7 @@
 // Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-//  Main screen: swing HUD, video with pose overlay, playback controls, and video pickers (Photos, Files).
+//  Main screen: swing HUD, video with pose overlay, rep gallery, playback and rep navigation, camera flow
+//  (record → Done → trim → analyze), and video pickers (Photos, Files).
 //  Launch with the SWING_VIDEO environment variable set to a file path to auto-load a video (simulator testing).
 
 import AVFoundation
@@ -12,8 +13,12 @@ struct ContentView: View {
   @StateObject private var session = VideoPoseSession()
   @State private var pickerItem: PhotosPickerItem?
   @State private var showFileImporter = false
+  @State private var showGallery = false
+  @State private var focusedPhase: SwingPhase?
   @State private var scrubTime = 0.0
   @State private var isScrubbing = false
+
+  private var busy: Bool { session.activity != .idle && session.source != .camera }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -25,9 +30,27 @@ struct ContentView: View {
         } else {
           PlayerView(player: session.player)
         }
-        PoseOverlayView(result: session.latestResult)
+        PoseOverlayView(frame: session.latestFrame)
+        if case .working(let label, let progress) = session.activity, session.source != .camera {
+          VStack(spacing: 8) {
+            ProgressView(value: progress).frame(width: 160)
+            Text(progress.map { "\(label) \(Int($0 * 100))%" } ?? "\(label)…")
+              .font(.footnote).foregroundStyle(.white)
+          }
+          .padding(16)
+          .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+        }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      if !session.reps.isEmpty && session.source != .camera {
+        RepGalleryWidget(
+          reps: session.reps, currentRep: session.currentRep?.number, focusedPhase: $focusedPhase
+        ) { position in
+          session.seek(to: position.time)
+        }
+        .frame(height: 170)
+        .padding(.horizontal, 8)
+      }
       controls
     }
     .background(Color(.systemBackground))
@@ -56,15 +79,25 @@ struct ContentView: View {
         session.load(url: dest)
       }
     }
+    .sheet(isPresented: $showGallery) {
+      RepGallerySheet(reps: session.reps, currentRep: session.currentRep?.number) { position in
+        session.seek(to: position.time)
+      }
+    }
   }
 
+  // MARK: - HUD
+
   private var hud: some View {
-    VStack(spacing: 8) {
+    VStack(spacing: 6) {
       HStack(alignment: .firstTextBaseline) {
-        Text("\(session.swing?.repCount ?? 0)")
-          .font(.system(size: 44, weight: .bold, design: .rounded))
+        Text("\(session.latestFrame?.swing?.repCount ?? 0)")
+          .font(.system(size: 40, weight: .bold, design: .rounded))
           .monospacedDigit()
         Text("reps").font(.headline).foregroundStyle(.secondary)
+        if session.source == .camera {
+          Text("● REC").font(.caption.bold()).foregroundStyle(.red).padding(.leading, 8)
+        }
         Spacer()
         VStack(alignment: .trailing, spacing: 2) {
           Text(session.modelStatus).font(.caption).foregroundStyle(.secondary)
@@ -75,10 +108,10 @@ struct ContentView: View {
 
       HStack(spacing: 6) {
         ForEach(SwingPhase.allCases, id: \.self) { phase in
-          let active = session.swing?.phase == phase
+          let active = session.latestFrame?.swing?.phase == phase
           Text(phase.rawValue.uppercased())
             .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.horizontal, 10).padding(.vertical, 4)
             .background(active ? Color.accentColor : Color(.secondarySystemFill))
             .foregroundStyle(active ? .white : .secondary)
             .clipShape(Capsule())
@@ -87,20 +120,23 @@ struct ContentView: View {
       }
 
       HStack(spacing: 16) {
-        metric("SPINE", session.swing?.angles.spine)
-        metric("ARM", session.swing?.angles.arm)
-        metric("HIP", session.swing?.angles.hip)
-        metric("KNEE", session.swing?.angles.knee)
+        metric("SPINE", session.latestFrame?.swing?.angles.spine)
+        metric("ARM", session.latestFrame?.swing?.angles.arm)
+        metric("HIP", session.latestFrame?.swing?.angles.hip)
+        metric("KNEE", session.latestFrame?.swing?.angles.knee)
         Spacer()
       }
 
-      if let quality = session.lastQuality {
+      if let message = session.statusMessage {
+        Text(message).font(.footnote).foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else if let quality = session.lastQuality {
         Text("Last rep \(quality.score)/100 · \(quality.feedback.joined(separator: " · "))")
           .font(.footnote).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .padding(.horizontal).padding(.vertical, 10)
+    .padding(.horizontal).padding(.vertical, 8)
   }
 
   private func metric(_ label: String, _ value: Double?) -> some View {
@@ -111,74 +147,112 @@ struct ContentView: View {
     }
   }
 
+  // MARK: - Controls
+
   private var controls: some View {
     VStack(spacing: 10) {
       if session.source == .camera {
-        HStack {
-          Button {
-            session.flipCamera()
-          } label: {
-            Label("Flip camera", systemImage: "arrow.triangle.2.circlepath.camera")
-          }
-          Spacer()
-          Text(session.cameraPosition == .front ? "Front camera" : "Back camera")
-            .font(.caption).foregroundStyle(.secondary)
-          Spacer()
-          Button {
-            session.stopCamera()
-          } label: {
-            Label("Stop camera", systemImage: "stop.circle")
-          }
-        }
-        .labelStyle(.iconOnly)
-        .font(.title3)
+        cameraControls
       } else {
-        HStack {
-          Button(action: session.togglePlayback) {
-            Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
-              .font(.title2).frame(width: 36)
-          }
-          .disabled(session.duration == 0)
-
-          Slider(
-            value: $scrubTime, in: 0...max(session.duration, 0.001),
-            onEditingChanged: { editing in
-              isScrubbing = editing
-              if !editing { session.seek(to: scrubTime) }
-            }
-          )
-          .disabled(session.duration == 0)
-
-          Text(timeString(scrubTime) + " / " + timeString(session.duration))
-            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-        }
+        playbackControls
       }
+    }
+    .padding(.horizontal).padding(.vertical, 10)
+    .disabled(busy)
+  }
+
+  private var cameraControls: some View {
+    HStack {
+      Button {
+        session.flipCamera()
+      } label: {
+        Label("Flip camera", systemImage: "arrow.triangle.2.circlepath.camera")
+      }
+      .labelStyle(.iconOnly).font(.title3)
+      Spacer()
+      Button {
+        session.finishCamera()
+      } label: {
+        Text("Done").font(.headline).padding(.horizontal, 24)
+      }
+      .buttonStyle(.borderedProminent)
+      Spacer()
+      Button(role: .destructive) {
+        session.cancelCamera()
+      } label: {
+        Label("Cancel", systemImage: "xmark.circle")
+      }
+      .labelStyle(.iconOnly).font(.title3)
+    }
+  }
+
+  private var playbackControls: some View {
+    Group {
+      HStack(spacing: 18) {
+        navButton("backward.end.fill", "Previous rep") { session.seekToRep(offset: -1) }
+        navButton("chevron.left.2", "Previous checkpoint") { session.seekToCheckpoint(offset: -1) }
+        navButton("chevron.left", "Previous frame") { session.stepFrame(-1) }
+        Button(action: session.togglePlayback) {
+          Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.title)
+        }
+        .disabled(session.duration == 0)
+        navButton("chevron.right", "Next frame") { session.stepFrame(1) }
+        navButton("chevron.right.2", "Next checkpoint") { session.seekToCheckpoint(offset: 1) }
+        navButton("forward.end.fill", "Next rep") { session.seekToRep(offset: 1) }
+      }
+      .frame(maxWidth: .infinity)
 
       HStack {
+        Slider(
+          value: $scrubTime, in: 0...max(session.duration, 0.001),
+          onEditingChanged: { editing in
+            isScrubbing = editing
+            if !editing { session.seek(to: scrubTime) }
+          }
+        )
+        .disabled(session.duration == 0)
+        Text(timeString(scrubTime) + " / " + timeString(session.duration))
+          .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+      }
+
+      HStack(spacing: 14) {
         Picker("Speed", selection: $session.rate) {
           Text("¼×").tag(Float(0.25))
           Text("½×").tag(Float(0.5))
           Text("1×").tag(Float(1.0))
         }
         .pickerStyle(.segmented)
-        .frame(width: 150)
-        .disabled(session.source == .camera)
+        .frame(width: 130)
 
         Spacer()
 
-        Button("Reset", action: session.resetAnalysis)
-
+        if !session.reps.isEmpty {
+          Button {
+            session.trimToReps()
+          } label: {
+            Label("Trim to reps", systemImage: "scissors")
+          }
+          Button {
+            showGallery = true
+          } label: {
+            Label("Rep gallery", systemImage: "square.grid.3x3")
+          }
+        }
+        if session.canSave {
+          Button {
+            session.saveToPhotos()
+          } label: {
+            Label("Save to Photos", systemImage: "square.and.arrow.down")
+          }
+        }
         Button {
           session.startCamera()
         } label: {
           Label("Camera", systemImage: "camera")
         }
-        .disabled(session.source == .camera)
-
         PhotosPicker(selection: $pickerItem, matching: .videos) {
           Label("Photos", systemImage: "photo.on.rectangle")
         }
-
         Button {
           showFileImporter = true
         } label: {
@@ -188,7 +262,15 @@ struct ContentView: View {
       .labelStyle(.iconOnly)
       .font(.title3)
     }
-    .padding(.horizontal).padding(.vertical, 10)
+  }
+
+  private func navButton(_ symbol: String, _ label: String, action: @escaping () -> Void)
+    -> some View
+  {
+    Button(action: action) {
+      Label(label, systemImage: symbol).labelStyle(.iconOnly).font(.title3)
+    }
+    .disabled(session.duration == 0)
   }
 
   private func timeString(_ seconds: Double) -> String {
@@ -224,7 +306,7 @@ struct PlayerView: UIViewRepresentable {
   func updateUIView(_ uiView: LayerView, context: Context) {}
 }
 
-/// Hosts the SDK's camera preview layer, resized with the view.
+/// Hosts the camera preview layer, resized with the view.
 struct CameraPreviewView: UIViewRepresentable {
   let previewLayer: AVCaptureVideoPreviewLayer?
 

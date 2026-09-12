@@ -35,3 +35,21 @@ build-device:
 run-device: build-device
     xcrun devicectl device install app --device {{device}} {{device_app}}
     xcrun devicectl device process launch --device {{device}} {{bundle}}
+
+# Copy the app's session logs (JSON Lines) from the connected iPhone to ~/tmp/agent/swing-logs.
+pull-logs:
+    mkdir -p ~/tmp/agent/swing-logs
+    xcrun devicectl device copy from --device {{device}} --domain-type appDataContainer \
+      --domain-identifier {{bundle}} --source Documents/logs --destination ~/tmp/agent/swing-logs
+    ls -t ~/tmp/agent/swing-logs/logs | head -5
+
+# Copy session logs from the simulator instead.
+pull-logs-sim:
+    mkdir -p ~/tmp/agent/swing-logs/sim
+    cp -R "$(xcrun simctl get_app_container "{{sim}}" {{bundle}} data)/Documents/logs/." ~/tmp/agent/swing-logs/sim/
+    ls -t ~/tmp/agent/swing-logs/sim | head -5
+
+# Summarize a log: reps, phases, offline pass, errors.
+log-summary file:
+    @jq -c 'select(.type != "frame")' {{file}}
+    @echo "frames: $(grep -c '"type":"frame"' {{file}})"

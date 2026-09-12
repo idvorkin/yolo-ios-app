@@ -396,14 +396,14 @@ public final class VideoCapture: NSObject, @unchecked Sendable {
     }
   }
 
-  public func start() {
+  func start() {
     cameraQueue.async { [weak self] in
       guard let self, !self.captureSession.isRunning else { return }
       self.captureSession.startRunning()
     }
   }
 
-  public func stop() {
+  func stop() {
     cameraQueue.async { [weak self] in
       guard let self, self.captureSession.isRunning else { return }
       self.captureSession.stopRunning()
@@ -529,7 +529,7 @@ public final class VideoCapture: NSObject, @unchecked Sendable {
     currentBuffer = nil
   }
 
-  public func updateVideoOrientation(orientation: AVCaptureVideoOrientation) {
+  func updateVideoOrientation(orientation: AVCaptureVideoOrientation) {
     cameraQueue.async { [weak self] in
       guard let self, let connection = self.videoOutput.connection(with: .video) else { return }
 

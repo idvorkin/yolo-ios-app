@@ -263,6 +263,7 @@
 				DEVELOPMENT_TEAM = 45P6D3439T;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Swing Analyzer uses the camera to analyze your kettlebell swing in real time.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Swing Analyzer reads the videos you pick to analyze your swing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -294,6 +295,7 @@
 				DEVELOPMENT_TEAM = 45P6D3439T;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Swing Analyzer uses the camera to analyze your kettlebell swing in real time.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Swing Analyzer reads the videos you pick to analyze your swing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
